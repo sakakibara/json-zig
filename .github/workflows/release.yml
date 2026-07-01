@@ -1,0 +1,81 @@
+name: release
+
+# Publish a GitHub Release when a vX.Y.Z tag is pushed. Release notes are
+# the matching CHANGELOG.md section, so the changelog stays the single
+# source of truth and the tag, build.zig.zon, and changelog cannot drift
+# apart in a published release. A tag push triggers only this workflow (not
+# ci.yml, which runs on branches), so the full gate is repeated here: a tag
+# must never publish an unverified commit.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # Fail before the build if the tag, build.zig.zon, and CHANGELOG.md
+      # disagree, or the changelog section is missing. Cheapest gate first.
+      - name: verify version and extract notes
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          zon_version="$(sed -n 's/^[[:space:]]*\.version = "\(.*\)",/\1/p' build.zig.zon)"
+          if [ "$version" != "$zon_version" ]; then
+            echo "tag $tag does not match build.zig.zon version $zon_version" >&2
+            exit 1
+          fi
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { capture = 1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "no CHANGELOG.md section for $version" >&2
+            exit 1
+          fi
+          echo "release notes for $version:"
+          cat release-notes.md
+
+      - name: install zig
+        shell: bash
+        run: |
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      # Gate the release on the same checks ci.yml runs on main: the unit +
+      # vendored-conformance test suite, a release-mode build, and the
+      # examples. A broken commit must never become a published release.
+      - name: zig build test
+        run: zig build test --summary all
+
+      - name: zig build (release)
+        run: zig build -Doptimize=ReleaseFast --summary all
+
+      - name: zig build examples
+        run: zig build examples
+
+      # Third-party action pinned to a commit SHA (not a movable tag) so a
+      # compromised or retagged release cannot run with this job's
+      # contents:write token. SHA is v2.6.2.
+      - name: create release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md

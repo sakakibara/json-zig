@@ -1,0 +1,9 @@
+{
+  // top
+  "list": [
+    1,
+    /* two */ 2,
+    { "deep": [true, null,], },
+  ],
+  "tail": "x", // eol comment
+}

@@ -1,0 +1,776 @@
+{
+  "name": "workspace-root",
+  "version": "3.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "node_modules/pkg-000": {
+      "version": "0.0.0",
+      "resolved": "https://registry.example.com/pkg-000/-/pkg-000-0.0.0.tgz",
+      "integrity": "sha512-000100020003000400050006000700080009000a000b==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-001": "^0.0.0",
+        "pkg-018": "^1.3.5"
+      },
+      "dev": true,
+      "hasInstallScript": true
+    },
+    "node_modules/pkg-001": {
+      "version": "1.7.13",
+      "resolved": "https://registry.example.com/pkg-001/-/pkg-001-1.7.13.tgz",
+      "integrity": "sha512-00040007000a000f00120017001a001f002600290030==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-002": "^0.0.0",
+        "pkg-019": "^1.3.5",
+        "pkg-036": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-002": {
+      "version": "2.14.26",
+      "resolved": "https://registry.example.com/pkg-002/-/pkg-002-2.14.26.tgz",
+      "integrity": "sha512-0007000c0011001a001f0028002d0036004300480055==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-003": "^0.0.0",
+        "pkg-020": "^1.3.5",
+        "pkg-037": "^2.6.0",
+        "pkg-006": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-003": {
+      "version": "3.1.9",
+      "resolved": "https://registry.example.com/pkg-003/-/pkg-003-3.1.9.tgz",
+      "integrity": "sha512-000a001100180025002c00390040004d00600067007a==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-004": "^0.0.0",
+        "pkg-021": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-004": {
+      "version": "4.8.22",
+      "resolved": "https://registry.example.com/pkg-004/-/pkg-004-4.8.22.tgz",
+      "integrity": "sha512-000d0016001f00300039004a00530064007d0086009f==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-005": "^0.0.0",
+        "pkg-022": "^1.3.5",
+        "pkg-039": "^2.6.0"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-005": {
+      "version": "5.15.5",
+      "resolved": "https://registry.example.com/pkg-005/-/pkg-005-5.15.5.tgz",
+      "integrity": "sha512-0010001b0026003b0046005b0066007b009a00a500c4==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-006": "^0.0.0",
+        "pkg-023": "^1.3.5",
+        "pkg-040": "^2.6.0",
+        "pkg-009": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-006": {
+      "version": "6.2.18",
+      "resolved": "https://registry.example.com/pkg-006/-/pkg-006-6.2.18.tgz",
+      "integrity": "sha512-00130020002d00460053006c0079009200b700c400e9==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-007": "^0.0.0",
+        "pkg-024": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-007": {
+      "version": "7.9.1",
+      "resolved": "https://registry.example.com/pkg-007/-/pkg-007-7.9.1.tgz",
+      "integrity": "sha512-00160025003400510060007d008c00a900d400e3010e==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-008": "^0.0.0",
+        "pkg-025": "^1.3.5",
+        "pkg-042": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-008": {
+      "version": "8.16.14",
+      "resolved": "https://registry.example.com/pkg-008/-/pkg-008-8.16.14.tgz",
+      "integrity": "sha512-0019002a003b005c006d008e009f00c000f101020133==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-009": "^0.0.0",
+        "pkg-026": "^1.3.5",
+        "pkg-043": "^2.6.0",
+        "pkg-012": "^3.9.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-009": {
+      "version": "0.3.27",
+      "resolved": "https://registry.example.com/pkg-009/-/pkg-009-0.3.27.tgz",
+      "integrity": "sha512-001c002f00420067007a009f00b200d7010e01210158==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-010": "^0.0.0",
+        "pkg-027": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-010": {
+      "version": "1.10.10",
+      "resolved": "https://registry.example.com/pkg-010/-/pkg-010-1.10.10.tgz",
+      "integrity": "sha512-001f003400490072008700b000c500ee012b0140017d==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-011": "^0.0.0",
+        "pkg-028": "^1.3.5",
+        "pkg-045": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-011": {
+      "version": "2.17.23",
+      "resolved": "https://registry.example.com/pkg-011/-/pkg-011-2.17.23.tgz",
+      "integrity": "sha512-002200390050007d009400c100d801050148015f01a2==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-012": "^0.0.0",
+        "pkg-029": "^1.3.5",
+        "pkg-046": "^2.6.0",
+        "pkg-015": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": true
+    },
+    "node_modules/pkg-012": {
+      "version": "3.4.6",
+      "resolved": "https://registry.example.com/pkg-012/-/pkg-012-3.4.6.tgz",
+      "integrity": "sha512-0025003e0057008800a100d200eb011c0165017e01c7==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-013": "^0.0.0",
+        "pkg-030": "^1.3.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-013": {
+      "version": "4.11.19",
+      "resolved": "https://registry.example.com/pkg-013/-/pkg-013-4.11.19.tgz",
+      "integrity": "sha512-00280043005e009300ae00e300fe01330182019d01ec==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-014": "^0.0.0",
+        "pkg-031": "^1.3.5",
+        "pkg-000": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-014": {
+      "version": "5.18.2",
+      "resolved": "https://registry.example.com/pkg-014/-/pkg-014-5.18.2.tgz",
+      "integrity": "sha512-002b00480065009e00bb00f40111014a019f01bc0211==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-015": "^0.0.0",
+        "pkg-032": "^1.3.5",
+        "pkg-001": "^2.6.0",
+        "pkg-018": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-015": {
+      "version": "6.5.15",
+      "resolved": "https://registry.example.com/pkg-015/-/pkg-015-6.5.15.tgz",
+      "integrity": "sha512-002e004d006c00a900c801050124016101bc01db0236==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-016": "^0.0.0",
+        "pkg-033": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-016": {
+      "version": "7.12.28",
+      "resolved": "https://registry.example.com/pkg-016/-/pkg-016-7.12.28.tgz",
+      "integrity": "sha512-00310052007300b400d501160137017801d901fa025b==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-017": "^0.0.0",
+        "pkg-034": "^1.3.5",
+        "pkg-003": "^2.6.0"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-017": {
+      "version": "8.19.11",
+      "resolved": "https://registry.example.com/pkg-017/-/pkg-017-8.19.11.tgz",
+      "integrity": "sha512-00340057007a00bf00e20127014a018f01f602190280==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-018": "^0.0.0",
+        "pkg-035": "^1.3.5",
+        "pkg-004": "^2.6.0",
+        "pkg-021": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-018": {
+      "version": "0.6.24",
+      "resolved": "https://registry.example.com/pkg-018/-/pkg-018-0.6.24.tgz",
+      "integrity": "sha512-0037005c008100ca00ef0138015d01a60213023802a5==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-019": "^0.0.0",
+        "pkg-036": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-019": {
+      "version": "1.13.7",
+      "resolved": "https://registry.example.com/pkg-019/-/pkg-019-1.13.7.tgz",
+      "integrity": "sha512-003a0061008800d500fc0149017001bd0230025702ca==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-020": "^0.0.0",
+        "pkg-037": "^1.3.5",
+        "pkg-006": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-020": {
+      "version": "2.0.20",
+      "resolved": "https://registry.example.com/pkg-020/-/pkg-020-2.0.20.tgz",
+      "integrity": "sha512-003d0066008f00e00109015a018301d4024d027602ef==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-021": "^0.0.0",
+        "pkg-038": "^1.3.5",
+        "pkg-007": "^2.6.0",
+        "pkg-024": "^3.9.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-021": {
+      "version": "3.7.3",
+      "resolved": "https://registry.example.com/pkg-021/-/pkg-021-3.7.3.tgz",
+      "integrity": "sha512-0040006b009600eb0116016b019601eb026a02950314==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-022": "^0.0.0",
+        "pkg-039": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-022": {
+      "version": "4.14.16",
+      "resolved": "https://registry.example.com/pkg-022/-/pkg-022-4.14.16.tgz",
+      "integrity": "sha512-00430070009d00f60123017c01a90202028702b40339==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-023": "^0.0.0",
+        "pkg-040": "^1.3.5",
+        "pkg-009": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": true
+    },
+    "node_modules/pkg-023": {
+      "version": "5.1.29",
+      "resolved": "https://registry.example.com/pkg-023/-/pkg-023-5.1.29.tgz",
+      "integrity": "sha512-0046007500a401010130018d01bc021902a402d3035e==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-024": "^0.0.0",
+        "pkg-041": "^1.3.5",
+        "pkg-010": "^2.6.0",
+        "pkg-027": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-024": {
+      "version": "6.8.12",
+      "resolved": "https://registry.example.com/pkg-024/-/pkg-024-6.8.12.tgz",
+      "integrity": "sha512-0049007a00ab010c013d019e01cf023002c102f20383==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-025": "^0.0.0",
+        "pkg-042": "^1.3.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-025": {
+      "version": "7.15.25",
+      "resolved": "https://registry.example.com/pkg-025/-/pkg-025-7.15.25.tgz",
+      "integrity": "sha512-004c007f00b20117014a01af01e2024702de031103a8==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-026": "^0.0.0",
+        "pkg-043": "^1.3.5",
+        "pkg-012": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-026": {
+      "version": "8.2.8",
+      "resolved": "https://registry.example.com/pkg-026/-/pkg-026-8.2.8.tgz",
+      "integrity": "sha512-004f008400b90122015701c001f5025e02fb033003cd==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-027": "^0.0.0",
+        "pkg-044": "^1.3.5",
+        "pkg-013": "^2.6.0",
+        "pkg-030": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-027": {
+      "version": "0.9.21",
+      "resolved": "https://registry.example.com/pkg-027/-/pkg-027-0.9.21.tgz",
+      "integrity": "sha512-0052008900c0012d016401d1020802750318034f03f2==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-028": "^0.0.0",
+        "pkg-045": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-028": {
+      "version": "1.16.4",
+      "resolved": "https://registry.example.com/pkg-028/-/pkg-028-1.16.4.tgz",
+      "integrity": "sha512-0055008e00c70138017101e2021b028c0335036e0417==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-029": "^0.0.0",
+        "pkg-046": "^1.3.5",
+        "pkg-015": "^2.6.0"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-029": {
+      "version": "2.3.17",
+      "resolved": "https://registry.example.com/pkg-029/-/pkg-029-2.3.17.tgz",
+      "integrity": "sha512-0058009300ce0143017e01f3022e02a30352038d043c==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-030": "^0.0.0",
+        "pkg-047": "^1.3.5",
+        "pkg-016": "^2.6.0",
+        "pkg-033": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-030": {
+      "version": "3.10.0",
+      "resolved": "https://registry.example.com/pkg-030/-/pkg-030-3.10.0.tgz",
+      "integrity": "sha512-005b009800d5014e018b0204024102ba036f03ac0461==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-031": "^0.0.0",
+        "pkg-000": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-031": {
+      "version": "4.17.13",
+      "resolved": "https://registry.example.com/pkg-031/-/pkg-031-4.17.13.tgz",
+      "integrity": "sha512-005e009d00dc015901980215025402d1038c03cb0486==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-032": "^0.0.0",
+        "pkg-001": "^1.3.5",
+        "pkg-018": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-032": {
+      "version": "5.4.26",
+      "resolved": "https://registry.example.com/pkg-032/-/pkg-032-5.4.26.tgz",
+      "integrity": "sha512-006100a200e3016401a50226026702e803a903ea04ab==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-033": "^0.0.0",
+        "pkg-002": "^1.3.5",
+        "pkg-019": "^2.6.0",
+        "pkg-036": "^3.9.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-033": {
+      "version": "6.11.9",
+      "resolved": "https://registry.example.com/pkg-033/-/pkg-033-6.11.9.tgz",
+      "integrity": "sha512-006400a700ea016f01b20237027a02ff03c6040904d0==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-034": "^0.0.0",
+        "pkg-003": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": true
+    },
+    "node_modules/pkg-034": {
+      "version": "7.18.22",
+      "resolved": "https://registry.example.com/pkg-034/-/pkg-034-7.18.22.tgz",
+      "integrity": "sha512-006700ac00f1017a01bf0248028d031603e3042804f5==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-035": "^0.0.0",
+        "pkg-004": "^1.3.5",
+        "pkg-021": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-035": {
+      "version": "8.5.5",
+      "resolved": "https://registry.example.com/pkg-035/-/pkg-035-8.5.5.tgz",
+      "integrity": "sha512-006a00b100f8018501cc025902a0032d04000447051a==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-036": "^0.0.0",
+        "pkg-005": "^1.3.5",
+        "pkg-022": "^2.6.0",
+        "pkg-039": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-036": {
+      "version": "0.12.18",
+      "resolved": "https://registry.example.com/pkg-036/-/pkg-036-0.12.18.tgz",
+      "integrity": "sha512-006d00b600ff019001d9026a02b30344041d0466053f==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-037": "^0.0.0",
+        "pkg-006": "^1.3.5"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-037": {
+      "version": "1.19.1",
+      "resolved": "https://registry.example.com/pkg-037/-/pkg-037-1.19.1.tgz",
+      "integrity": "sha512-007000bb0106019b01e6027b02c6035b043a04850564==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-038": "^0.0.0",
+        "pkg-007": "^1.3.5",
+        "pkg-024": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-038": {
+      "version": "2.6.14",
+      "resolved": "https://registry.example.com/pkg-038/-/pkg-038-2.6.14.tgz",
+      "integrity": "sha512-007300c0010d01a601f3028c02d90372045704a40589==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-039": "^0.0.0",
+        "pkg-008": "^1.3.5",
+        "pkg-025": "^2.6.0",
+        "pkg-042": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-039": {
+      "version": "3.13.27",
+      "resolved": "https://registry.example.com/pkg-039/-/pkg-039-3.13.27.tgz",
+      "integrity": "sha512-007600c5011401b10200029d02ec0389047404c305ae==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-040": "^0.0.0",
+        "pkg-009": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-040": {
+      "version": "4.0.10",
+      "resolved": "https://registry.example.com/pkg-040/-/pkg-040-4.0.10.tgz",
+      "integrity": "sha512-007900ca011b01bc020d02ae02ff03a0049104e205d3==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-041": "^0.0.0",
+        "pkg-010": "^1.3.5",
+        "pkg-027": "^2.6.0"
+      },
+      "dev": true,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-041": {
+      "version": "5.7.23",
+      "resolved": "https://registry.example.com/pkg-041/-/pkg-041-5.7.23.tgz",
+      "integrity": "sha512-007c00cf012201c7021a02bf031203b704ae050105f8==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-042": "^0.0.0",
+        "pkg-011": "^1.3.5",
+        "pkg-028": "^2.6.0",
+        "pkg-045": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-042": {
+      "version": "6.14.6",
+      "resolved": "https://registry.example.com/pkg-042/-/pkg-042-6.14.6.tgz",
+      "integrity": "sha512-007f00d4012901d2022702d0032503ce04cb0520061d==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=14"
+      },
+      "dependencies": {
+        "pkg-043": "^0.0.0",
+        "pkg-012": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-043": {
+      "version": "7.1.19",
+      "resolved": "https://registry.example.com/pkg-043/-/pkg-043-7.1.19.tgz",
+      "integrity": "sha512-008200d9013001dd023402e1033803e504e8053f0642==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=16"
+      },
+      "dependencies": {
+        "pkg-044": "^0.0.0",
+        "pkg-013": "^1.3.5",
+        "pkg-030": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-044": {
+      "version": "8.8.2",
+      "resolved": "https://registry.example.com/pkg-044/-/pkg-044-8.8.2.tgz",
+      "integrity": "sha512-008500de013701e8024102f2034b03fc0505055e0667==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=18"
+      },
+      "dependencies": {
+        "pkg-045": "^0.0.0",
+        "pkg-014": "^1.3.5",
+        "pkg-031": "^2.6.0",
+        "pkg-000": "^3.9.5"
+      },
+      "dev": true,
+      "hasInstallScript": true
+    },
+    "node_modules/pkg-045": {
+      "version": "0.15.15",
+      "resolved": "https://registry.example.com/pkg-045/-/pkg-045-0.15.15.tgz",
+      "integrity": "sha512-008800e3013e01f3024e0303035e04130522057d068c==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "dependencies": {
+        "pkg-046": "^0.0.0",
+        "pkg-015": "^1.3.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-046": {
+      "version": "1.2.28",
+      "resolved": "https://registry.example.com/pkg-046/-/pkg-046-1.2.28.tgz",
+      "integrity": "sha512-008b00e8014501fe025b03140371042a053f059c06b1==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=22"
+      },
+      "dependencies": {
+        "pkg-047": "^0.0.0",
+        "pkg-016": "^1.3.5",
+        "pkg-033": "^2.6.0"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    },
+    "node_modules/pkg-047": {
+      "version": "2.9.11",
+      "resolved": "https://registry.example.com/pkg-047/-/pkg-047-2.9.11.tgz",
+      "integrity": "sha512-008e00ed014c02090268032503840441055c05bb06d6==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">=24"
+      },
+      "dependencies": {
+        "pkg-000": "^0.0.0",
+        "pkg-017": "^1.3.5",
+        "pkg-034": "^2.6.0",
+        "pkg-003": "^3.9.5"
+      },
+      "dev": false,
+      "hasInstallScript": false
+    }
+  }
+}
