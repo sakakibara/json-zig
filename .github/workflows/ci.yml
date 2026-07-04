@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  ZIG_VERSION: "0.16.0"
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -15,10 +18,19 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: install zig
+        shell: bash
+        run: |
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)    triple=x86_64-linux ;;
+            Linux-ARM64)  triple=aarch64-linux ;;
+            macOS-ARM64)  triple=aarch64-macos ;;
+            *) echo "unsupported runner: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+          esac
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${triple}-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Test
         run: zig build test --summary all
       - name: Build examples
@@ -39,10 +51,19 @@ jobs:
           - wasm32-wasi
     steps:
       - uses: actions/checkout@v4
-      - name: Install Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: 0.16.0
+      - name: install zig
+        shell: bash
+        run: |
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64)    triple=x86_64-linux ;;
+            Linux-ARM64)  triple=aarch64-linux ;;
+            macOS-ARM64)  triple=aarch64-macos ;;
+            *) echo "unsupported runner: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+          esac
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${triple}-${ZIG_VERSION}.tar.xz"
+          mkdir -p "$HOME/zig"
+          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
+          echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: Build (fuzzer, ReleaseFast)
         run: zig build -Dtarget=${{ matrix.target }}
       - name: Build examples
