@@ -164,41 +164,41 @@ pub fn parseIntoReader(comptime T: type, arena: std.mem.Allocator, reader: *std.
 /// and +/-Inf `.float` values (JSON has no token for them), plus
 /// `NestingTooDeep` when a hand-built tree exceeds the recursion limit,
 /// plus `OutOfMemory`, reachable only from `encodeTyped`'s `toJson`
-/// hooks (never from `encode`/`encodePretty`; Zig error sets are
-/// per-function, not per-branch).
+/// hooks (never from `encode`; Zig error sets are per-function, not
+/// per-branch).
 pub const EncodeError = encoder_mod.EncodeError;
 
-/// Options for `encodePretty`. `indent` is the number of spaces per
-/// nesting level.
-pub const PrettyOptions = encoder_mod.PrettyOptions;
+/// Options shared by `encode` and `encodeTyped`. `indent` selects compact
+/// (`null`, the default) vs pretty-printed (`N` spaces per level);
+/// `sort_keys` emits object members in ascending lexicographic key order,
+/// recursively. Both default to the prior behavior, so output is unchanged
+/// unless set.
+pub const EncodeOptions = encoder_mod.EncodeOptions;
 
-/// Encode a `Value` tree as compact JSON: no whitespace, object members
-/// in insertion order. Output is always plain JSON (never comments or
-/// trailing commas), regardless of the dialect the tree was parsed from.
-pub fn encode(w: *std.Io.Writer, value: Value) EncodeError!void {
-    return encoder_mod.encode(w, value);
+/// Encode a `Value` tree as JSON. Default options give compact output with
+/// members in insertion order; `options.indent` pretty-prints and
+/// `options.sort_keys` sorts object keys. Output is always plain JSON
+/// (never comments or trailing commas), regardless of the dialect the tree
+/// was parsed from.
+pub fn encode(w: *std.Io.Writer, value: Value, options: EncodeOptions) EncodeError!void {
+    return encoder_mod.encode(w, value, options);
 }
 
-/// Pretty-printed variant of `encode`: members one per line, indented
-/// by `options.indent` spaces per level, `"key": value` members, and
-/// closing brackets on their own line. Empty containers emit `{}`/`[]`.
-pub fn encodePretty(w: *std.Io.Writer, value: Value, options: PrettyOptions) EncodeError!void {
-    return encoder_mod.encodePretty(w, value, options);
-}
-
-/// Encode a typed Zig value as compact JSON, honoring the same
-/// `json_rename` / `json_skip` / `json_flatten` / `json_tag` annotations
-/// and `toJson` hooks that `decode` honors, so the output decodes back
-/// via `parseInto(T, ...)`. Null optional fields are omitted entirely;
-/// enums emit their tag name as a string; tagged unions emit the
-/// discriminator member first with the payload's fields inline in the
-/// same object. `arena` only backs `Value`s built by `toJson` hooks.
+/// Encode a typed Zig value as JSON, honoring the same `json_rename` /
+/// `json_skip` / `json_flatten` / `json_tag` annotations and `toJson` hooks
+/// that `decode` honors, so the output decodes back via `parseInto(T, ...)`.
+/// Null optional fields are omitted entirely; enums emit their tag name as a
+/// string; tagged unions emit the discriminator member first with the
+/// payload's fields inline in the same object. `options.indent` pretty-prints
+/// and `options.sort_keys` emits members in ascending key order (declaration
+/// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
+/// the buffers `sort_keys` uses to reorder members.
 ///
 /// Annotations and hooks are read from `@TypeOf(value)`, so bind an
 /// anonymous struct literal to the annotated type before passing it
 /// (an anonymous literal's type carries no declarations).
-pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator) EncodeError!void {
-    return encoder_mod.encodeTyped(w, value, arena);
+pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
+    return encoder_mod.encodeTyped(w, value, arena, options);
 }
 
 test "spans recorded per dotted path" {
@@ -227,7 +227,7 @@ test "raw number mode preserves exact lexemes through the public API" {
     // Encode re-emits verbatim.
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, v);
+    try encode(&aw.writer, v, .{});
     try std.testing.expectEqualStrings(src, aw.written());
 }
 

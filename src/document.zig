@@ -630,7 +630,7 @@ fn makeContainer(arena: Allocator, start: usize, end: usize, data: @FieldType(No
 fn renderValue(arena: Allocator, value: Value) Error![]const u8 {
     var aw: Io.Writer.Allocating = .init(arena);
     defer aw.deinit();
-    encoder.encode(&aw.writer, value) catch |err| switch (err) {
+    encoder.encode(&aw.writer, value, .{}) catch |err| switch (err) {
         // The allocating writer fails a write only on allocation failure.
         error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
         error.UnrepresentableFloat, error.NestingTooDeep => return error.InvalidValue,

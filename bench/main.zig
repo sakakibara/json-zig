@@ -103,7 +103,7 @@ pub fn main(init: std.process.Init) !void {
         try benchEncode(io, gpa, static, "encode (compact)", name, src, .compact);
     }
     for (fixture_names, fixtures) |name, src| {
-        try benchEncode(io, gpa, static, "encodePretty", name, src, .pretty);
+        try benchEncode(io, gpa, static, "encode pretty", name, src, .pretty);
     }
     for (fixture_names, fixtures) |name, src| {
         try benchDocumentCycle(io, gpa, name, src);
@@ -143,8 +143,8 @@ fn benchEncode(io: Io, gpa: std.mem.Allocator, static: std.mem.Allocator, label:
         aw.clearRetainingCapacity();
         const t0: Io.Timestamp = .now(io, .awake);
         switch (mode) {
-            .compact => try json.encode(&aw.writer, v),
-            .pretty => try json.encodePretty(&aw.writer, v, .{}),
+            .compact => try json.encode(&aw.writer, v, .{}),
+            .pretty => try json.encode(&aw.writer, v, .{ .indent = 2 }),
         }
         const ns: u64 = @intCast(t0.durationTo(.now(io, .awake)).nanoseconds);
         out_len = aw.written().len;

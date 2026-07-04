@@ -33,7 +33,24 @@ pub const Value = value_mod.Value;
 /// `Value` in the caller's arena.
 pub const EncodeError = Io.Writer.Error || error{ UnrepresentableFloat, NestingTooDeep, OutOfMemory };
 
-pub const PrettyOptions = struct { indent: usize = 2 };
+/// Shared options for every encode entry point.
+///
+/// `indent` selects layout: `null` (default) emits compact JSON with no
+/// whitespace; `N` pretty-prints with `N` spaces of indent per nesting
+/// level. `sort_keys` selects member order: `false` (default) preserves
+/// insertion order (`Value`) and declaration order (typed); `true` emits
+/// object members in ascending byte-lexicographic key order, recursively.
+///
+/// Byte-lexicographic means keys are ordered by their raw UTF-8 bytes.
+/// This is deterministic and diff-stable; it is NOT RFC 8785 (JCS) canonical
+/// ordering (which sorts by UTF-16 code unit and re-serializes numbers).
+///
+/// Both fields default to the prior behavior, so existing output is
+/// byte-for-byte unchanged unless a field is set.
+pub const EncodeOptions = struct {
+    indent: ?usize = null,
+    sort_keys: bool = false,
+};
 
 /// Maximum array/object nesting depth. `writeValue` recurses one host
 /// stack frame per level, so this is the stack-safe ceiling shared with
@@ -41,26 +58,22 @@ pub const PrettyOptions = struct { indent: usize = 2 };
 /// deeper yields `error.NestingTooDeep`, never a stack overflow.
 const max_encode_depth = value_mod.recursive_depth_ceiling;
 
-/// Encode `value` as compact JSON to `w`: no whitespace anywhere,
-/// object members in insertion order. Returns `error.NestingTooDeep`
-/// when array/object nesting exceeds `max_encode_depth` (128).
+/// Encode a `Value` tree as JSON to `w`. With default options the output
+/// is compact (no whitespace, members in insertion order) -- byte-for-byte
+/// the prior `encode` behavior. `options.indent` pretty-prints (members one
+/// per line, `"key": value`, closing bracket on its own line; empty
+/// containers stay `{}`/`[]`); `options.sort_keys` emits object members in
+/// ascending lexicographic key order, recursively. Output is always plain
+/// JSON (never comments or trailing commas), regardless of the dialect the
+/// tree was parsed from. Returns `error.NestingTooDeep` when array/object
+/// nesting exceeds `max_encode_depth` (128).
 ///
 /// Precondition: every `.string` byte slice must be valid UTF-8 (GIGO).
 /// The encoder passes string bytes through without validation, so a
 /// hand-built `Value{ .string = "\xff" }` emits invalid JSON; values
 /// produced by `parse` already satisfy this. No runtime check is done.
-pub fn encode(w: *Io.Writer, value: Value) EncodeError!void {
-    try writeValue(w, value, null, 0);
-}
-
-/// Encode `value` as pretty-printed JSON: members one per line,
-/// indented `options.indent` spaces per nesting level, `"key": value`
-/// with a space after the colon, closing bracket on its own line at
-/// the parent's indent. Empty containers emit `{}`/`[]` inline.
-/// Returns `error.NestingTooDeep` when nesting exceeds `max_encode_depth`
-/// (128).
-pub fn encodePretty(w: *Io.Writer, value: Value, options: PrettyOptions) EncodeError!void {
-    try writeValue(w, value, options.indent, 0);
+pub fn encode(w: *Io.Writer, value: Value, options: EncodeOptions) EncodeError!void {
+    try writeValue(w, value, options, 0);
 }
 
 /// Encode a typed Zig value as compact JSON, consulting the same
@@ -92,14 +105,14 @@ pub fn encodePretty(w: *Io.Writer, value: Value, options: PrettyOptions) EncodeE
 /// precision. Round-tripping such a value requires `number_mode = .raw` on
 /// the decode side, targeting a type wide enough (e.g. u128 or a custom
 /// `fromJson` hook).
-pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator) EncodeError!void {
+pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
     const T = @TypeOf(value);
-    try writeTypedValue(T, value, w, arena, 0);
+    try writeTypedValue(T, value, w, arena, options, 0);
 }
 
-fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, depth: usize) EncodeError!void {
+fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     if (depth > max_encode_depth) return error.NestingTooDeep;
-    if (T == Value) return writeValue(w, value, null, depth);
+    if (T == Value) return writeValue(w, value, options, depth);
 
     // Custom toJson hook short-circuit, symmetric with decode's fromJson.
     if (comptime (@typeInfo(T) == .@"struct" and @hasDecl(T, "toJson"))) {
@@ -112,11 +125,11 @@ fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.All
         const hooked = T.toJson(value, arena) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };
-        return writeValue(w, hooked, null, depth);
+        return writeValue(w, hooked, options, depth);
     }
 
     if (comptime (@typeInfo(T) == .@"union" and @hasDecl(T, "json_tag"))) {
-        return writeTypedTaggedUnion(T, value, w, arena, depth);
+        return writeTypedTaggedUnion(T, value, w, arena, options, depth);
     }
 
     switch (@typeInfo(T)) {
@@ -126,94 +139,201 @@ fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.All
         .pointer => |p| {
             if (p.size != .slice) @compileError("json encodeTyped: only slice pointers supported, got " ++ @typeName(T));
             if (p.child == u8 and p.is_const) return writeQuotedString(w, value);
-            try writeTypedArray(p.child, value, w, arena, depth);
+            try writeTypedArray(p.child, value, w, arena, options, depth);
         },
-        .array => |a| try writeTypedArray(a.child, &value, w, arena, depth),
+        .array => |a| try writeTypedArray(a.child, &value, w, arena, options, depth),
         .optional => |o| {
             // A null optional reaching this point sits inside an array (or
             // at the root), where there is no object member to omit, so it
             // emits JSON null. Struct fields omit null optionals upstream.
             if (value) |inner| {
-                try writeTypedValue(o.child, inner, w, arena, depth);
+                try writeTypedValue(o.child, inner, w, arena, options, depth);
             } else {
                 try w.writeAll("null");
             }
         },
-        .@"struct" => {
-            comptime decode_mod.validateAnnotations(T);
-            try w.writeByte('{');
-            var first = true;
-            try writeTypedStructFields(T, value, w, arena, depth, &first);
-            try w.writeByte('}');
-        },
+        .@"struct" => try writeTypedObject(T, value, w, arena, options, depth),
         .@"enum" => try writeQuotedString(w, @tagName(value)),
         else => @compileError("json encodeTyped: unsupported type " ++ @typeName(T)),
     }
 }
 
-fn writeTypedArray(comptime Child: type, items: []const Child, w: *Io.Writer, arena: std.mem.Allocator, depth: usize) EncodeError!void {
+/// Emit a struct as a JSON object honoring `options`. Without `sort_keys`
+/// this streams members in declaration order (flattened fields inline);
+/// with it, members (flattened ones included) are buffered and emitted in
+/// ascending key order.
+fn writeTypedObject(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+    comptime decode_mod.validateAnnotations(T);
+    if (options.sort_keys) return writeTypedObjectSorted(T, value, w, arena, options, depth);
+    try w.writeByte('{');
+    var first = true;
+    try writeTypedStructFields(T, value, w, arena, options, depth, &first);
+    if (!first) try newlineIndent(w, options.indent, depth);
+    try w.writeByte('}');
+}
+
+fn writeTypedArray(comptime Child: type, items: []const Child, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+    if (items.len == 0) return w.writeAll("[]");
     try w.writeByte('[');
     for (items, 0..) |item, i| {
         if (i > 0) try w.writeByte(',');
-        try writeTypedValue(Child, item, w, arena, depth + 1);
+        try newlineIndent(w, options.indent, depth + 1);
+        try writeTypedValue(Child, item, w, arena, options, depth + 1);
     }
+    try newlineIndent(w, options.indent, depth);
     try w.writeByte(']');
 }
 
 /// Emits the members of `value` without the surrounding braces, so that
 /// flattened fields and tagged-union payloads inline into the parent
-/// object. `first` carries comma state across recursion levels.
-fn writeTypedStructFields(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, depth: usize, first: *bool) EncodeError!void {
+/// object. `first` carries comma state across recursion levels; members
+/// sit at `depth + 1`.
+fn writeTypedStructFields(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize, first: *bool) EncodeError!void {
     inline for (@typeInfo(T).@"struct".fields) |field| {
         if (comptime decode_mod.isSkipped(T, field.name)) continue;
         const fv = @field(value, field.name);
         if (comptime decode_mod.isFlattened(T, field.name)) {
             comptime decode_mod.validateAnnotations(field.type);
-            try writeTypedStructFields(field.type, fv, w, arena, depth, first);
+            try writeTypedStructFields(field.type, fv, w, arena, options, depth, first);
         } else if (comptime @typeInfo(field.type) == .optional) {
             // Null optionals are omitted; decode maps the absent key back
             // to null, so the round-trip is lossless.
             if (fv) |inner| {
-                try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), first);
-                try writeTypedValue(@typeInfo(field.type).optional.child, inner, w, arena, depth + 1);
+                try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), options, depth + 1, first);
+                try writeTypedValue(@typeInfo(field.type).optional.child, inner, w, arena, options, depth + 1);
             }
         } else {
-            try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), first);
-            try writeTypedValue(field.type, fv, w, arena, depth + 1);
+            try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), options, depth + 1, first);
+            try writeTypedValue(field.type, fv, w, arena, options, depth + 1);
         }
     }
 }
 
-fn writeTypedMember(w: *Io.Writer, key: []const u8, first: *bool) EncodeError!void {
+fn writeTypedMember(w: *Io.Writer, key: []const u8, options: EncodeOptions, depth: usize, first: *bool) EncodeError!void {
     if (!first.*) try w.writeByte(',');
     first.* = false;
+    try newlineIndent(w, options.indent, depth);
     try writeQuotedString(w, key);
     try w.writeByte(':');
+    if (options.indent != null) try w.writeByte(' ');
 }
 
-fn writeTypedTaggedUnion(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, depth: usize) EncodeError!void {
+fn writeTypedTaggedUnion(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     comptime decode_mod.validateAnnotations(T);
+    if (options.sort_keys) return writeTypedTaggedUnionSorted(T, value, w, arena, options, depth);
     const active = std.meta.activeTag(value);
     try w.writeByte('{');
+    var first = true;
     inline for (@typeInfo(T).@"union".fields) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
-            try writeQuotedString(w, T.json_tag);
-            try w.writeByte(':');
+            try writeTypedMember(w, T.json_tag, options, depth + 1, &first);
             try writeQuotedString(w, comptime decode_mod.renamedKey(T, union_field.name));
             if (union_field.type != void) {
-                // Discriminator member is already written, so payload
-                // members all get a leading comma.
-                var first = false;
-                try writeTypedStructFields(union_field.type, @field(value, union_field.name), w, arena, depth, &first);
+                try writeTypedStructFields(union_field.type, @field(value, union_field.name), w, arena, options, depth, &first);
             }
         }
     }
+    if (!first) try newlineIndent(w, options.indent, depth);
     try w.writeByte('}');
 }
 
-/// `indent` null means compact mode; `depth` tracks nesting for both
+// Sorted typed object emission
+
+/// A rendered object member: its emitted key and the already-encoded JSON
+/// of its value. Buffered so members (flattened ones included) can be
+/// sorted by key before emission.
+const TypedMember = struct { key: []const u8, json: []const u8 };
+
+fn typedMemberLess(_: void, a: TypedMember, b: TypedMember) bool {
+    return std.mem.lessThan(u8, a.key, b.key);
+}
+
+fn writeTypedObjectSorted(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+    var members: std.ArrayList(TypedMember) = .empty;
+    try collectTypedMembers(T, value, arena, options, depth + 1, &members);
+    try emitSortedTypedMembers(w, members.items, options, depth);
+}
+
+fn writeTypedTaggedUnionSorted(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+    const active = std.meta.activeTag(value);
+    var members: std.ArrayList(TypedMember) = .empty;
+    inline for (@typeInfo(T).@"union".fields) |union_field| {
+        if (active == @field(std.meta.Tag(T), union_field.name)) {
+            try members.append(arena, .{
+                .key = T.json_tag,
+                .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, union_field.name)),
+            });
+            if (union_field.type != void) {
+                try collectTypedMembers(union_field.type, @field(value, union_field.name), arena, options, depth + 1, &members);
+            }
+        }
+    }
+    try emitSortedTypedMembers(w, members.items, options, depth);
+}
+
+/// Sort buffered members by key and emit them as an object body at `depth`.
+fn emitSortedTypedMembers(w: *Io.Writer, members: []TypedMember, options: EncodeOptions, depth: usize) EncodeError!void {
+    if (members.len == 0) return w.writeAll("{}");
+    // Stable sort so a duplicate emitted key (a rename collision) keeps a
+    // deterministic order rather than depending on tie-breaking.
+    std.mem.sort(TypedMember, members, {}, typedMemberLess);
+    try w.writeByte('{');
+    for (members, 0..) |m, i| {
+        if (i > 0) try w.writeByte(',');
+        try newlineIndent(w, options.indent, depth + 1);
+        try writeQuotedString(w, m.key);
+        try w.writeByte(':');
+        if (options.indent != null) try w.writeByte(' ');
+        try w.writeAll(m.json);
+    }
+    try newlineIndent(w, options.indent, depth);
+    try w.writeByte('}');
+}
+
+/// Recursively gather a struct's emitted members (flattened fields promoted
+/// into the parent, skipped fields dropped, null optionals omitted), each
+/// value rendered to JSON at `member_depth`.
+fn collectTypedMembers(comptime T: type, value: T, arena: std.mem.Allocator, options: EncodeOptions, member_depth: usize, members: *std.ArrayList(TypedMember)) EncodeError!void {
+    inline for (@typeInfo(T).@"struct".fields) |field| {
+        if (comptime decode_mod.isSkipped(T, field.name)) continue;
+        const fv = @field(value, field.name);
+        if (comptime decode_mod.isFlattened(T, field.name)) {
+            comptime decode_mod.validateAnnotations(field.type);
+            try collectTypedMembers(field.type, fv, arena, options, member_depth, members);
+        } else if (comptime @typeInfo(field.type) == .optional) {
+            if (fv) |inner| {
+                try members.append(arena, .{
+                    .key = comptime decode_mod.renamedKey(T, field.name),
+                    .json = try renderTypedValue(@typeInfo(field.type).optional.child, inner, arena, options, member_depth),
+                });
+            }
+        } else {
+            try members.append(arena, .{
+                .key = comptime decode_mod.renamedKey(T, field.name),
+                .json = try renderTypedValue(field.type, fv, arena, options, member_depth),
+            });
+        }
+    }
+}
+
+/// Encode a typed value to an arena-owned JSON byte slice at `depth`, so a
+/// sorted object can place it after its key. Recurses through `options`,
+/// so nested objects sort too.
+fn renderTypedValue(comptime FT: type, fv: FT, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError![]u8 {
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    try writeTypedValue(FT, fv, &buf.writer, arena, options, depth);
+    return buf.written();
+}
+
+fn renderTypedString(arena: std.mem.Allocator, s: []const u8) EncodeError![]u8 {
+    var buf: std.Io.Writer.Allocating = .init(arena);
+    try writeQuotedString(&buf.writer, s);
+    return buf.written();
+}
+
+/// `options.indent` null means compact mode; `depth` tracks nesting for both
 /// indentation and the `max_encode_depth` guard.
-fn writeValue(w: *Io.Writer, val: Value, indent: ?usize, depth: usize) EncodeError!void {
+fn writeValue(w: *Io.Writer, val: Value, options: EncodeOptions, depth: usize) EncodeError!void {
     if (depth > max_encode_depth) return error.NestingTooDeep;
     switch (val) {
         .null => try w.writeAll("null"),
@@ -228,30 +348,62 @@ fn writeValue(w: *Io.Writer, val: Value, indent: ?usize, depth: usize) EncodeErr
             try w.writeByte('[');
             for (arr, 0..) |item, i| {
                 if (i > 0) try w.writeByte(',');
-                try newlineIndent(w, indent, depth + 1);
-                try writeValue(w, item, indent, depth + 1);
+                try newlineIndent(w, options.indent, depth + 1);
+                try writeValue(w, item, options, depth + 1);
             }
-            try newlineIndent(w, indent, depth);
+            try newlineIndent(w, options.indent, depth);
             try w.writeByte(']');
         },
         .object => |obj| {
             if (obj.count() == 0) return w.writeAll("{}");
             try w.writeByte('{');
-            var it = obj.iterator();
-            var first = true;
-            while (it.next()) |entry| {
-                if (!first) try w.writeByte(',');
-                first = false;
-                try newlineIndent(w, indent, depth + 1);
-                try writeQuotedString(w, entry.key_ptr.*);
-                try w.writeByte(':');
-                if (indent != null) try w.writeByte(' ');
-                try writeValue(w, entry.value_ptr.*, indent, depth + 1);
+            if (options.sort_keys) {
+                try writeObjectSorted(w, obj, options, depth);
+            } else {
+                var it = obj.iterator();
+                var first = true;
+                while (it.next()) |entry| {
+                    if (!first) try w.writeByte(',');
+                    first = false;
+                    try writeObjectMember(w, entry.key_ptr.*, entry.value_ptr.*, options, depth);
+                }
             }
-            try newlineIndent(w, indent, depth);
+            try newlineIndent(w, options.indent, depth);
             try w.writeByte('}');
         },
     }
+}
+
+/// Emit object members in ascending byte-lexicographic key order without a
+/// scratch buffer. Keys in a `StringArrayHashMap` are unique, so repeatedly
+/// selecting "the smallest key greater than the previous" walks them in
+/// order. O(n^2) in member count: `sort_keys` targets human-scale documents,
+/// and this keeps the `Value` encode path allocation-free.
+fn writeObjectSorted(w: *Io.Writer, obj: value_mod.ObjectMap, options: EncodeOptions, depth: usize) EncodeError!void {
+    const keys = obj.keys();
+    var prev: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < keys.len) : (i += 1) {
+        var best: ?usize = null;
+        for (keys, 0..) |k, j| {
+            if (prev) |p| if (!std.mem.lessThan(u8, p, k)) continue;
+            if (best) |b| {
+                if (std.mem.lessThan(u8, k, keys[b])) best = j;
+            } else best = j;
+        }
+        const idx = best.?;
+        if (i > 0) try w.writeByte(',');
+        try writeObjectMember(w, keys[idx], obj.values()[idx], options, depth);
+        prev = keys[idx];
+    }
+}
+
+fn writeObjectMember(w: *Io.Writer, key: []const u8, val: Value, options: EncodeOptions, depth: usize) EncodeError!void {
+    try newlineIndent(w, options.indent, depth + 1);
+    try writeQuotedString(w, key);
+    try w.writeByte(':');
+    if (options.indent != null) try w.writeByte(' ');
+    try writeValue(w, val, options, depth + 1);
 }
 
 fn newlineIndent(w: *Io.Writer, indent: ?usize, depth: usize) EncodeError!void {
@@ -319,7 +471,7 @@ test "encode compact canonical" {
     const v = try parse(a, "{ \"b\" : [ 1 , 2.5 , null ] , \"s\" : \"q\\\"\" }", .{});
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, v);
+    try encode(&aw.writer, v, .{});
     try std.testing.expectEqualStrings("{\"b\":[1,2.5,null],\"s\":\"q\\\"\"}", aw.written());
 }
 
@@ -331,7 +483,7 @@ test "raw number round-trips through encode verbatim" {
     const v = try parse(a, src, .{ .number_mode = .raw });
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, v);
+    try encode(&aw.writer, v, .{});
     try std.testing.expectEqualStrings(src, aw.written());
 }
 
@@ -342,7 +494,7 @@ test "encode pretty with indent" {
     const v = try parse(a, "{\"a\":[1]}", .{});
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodePretty(&aw.writer, v, .{ .indent = 2 });
+    try encode(&aw.writer, v, .{ .indent = 2 });
     try std.testing.expectEqualStrings("{\n  \"a\": [\n    1\n  ]\n}", aw.written());
 }
 
@@ -352,7 +504,7 @@ test "encode escapes control chars and preserves unicode" {
     const a = ar.allocator();
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .string = "\x01\n\xe3\x81\x82" });
+    try encode(&aw.writer, .{ .string = "\x01\n\xe3\x81\x82" }, .{});
     try std.testing.expectEqualStrings("\"\\u0001\\n\xe3\x81\x82\"", aw.written());
 }
 
@@ -362,7 +514,7 @@ test "float encoding round-trips" {
     const a = ar.allocator();
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .float = 0.1 });
+    try encode(&aw.writer, .{ .float = 0.1 }, .{});
     const back = try parse(a, aw.written(), .{});
     try std.testing.expectEqual(@as(f64, 0.1), back.float);
 }
@@ -374,7 +526,7 @@ test "encode pretty three levels deep" {
     const v = try parse(a, "{\"a\":{\"b\":[1,{\"c\":true}]}}", .{});
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodePretty(&aw.writer, v, .{ .indent = 2 });
+    try encode(&aw.writer, v, .{ .indent = 2 });
     const expected =
         "{\n" ++
         "  \"a\": {\n" ++
@@ -397,22 +549,22 @@ test "encode empty containers compact and pretty" {
 
     var compact: Io.Writer.Allocating = .init(a);
     defer compact.deinit();
-    try encode(&compact.writer, v);
+    try encode(&compact.writer, v, .{});
     try testing.expectEqualStrings("{\"o\":{},\"a\":[]}", compact.written());
 
     var pretty: Io.Writer.Allocating = .init(a);
     defer pretty.deinit();
-    try encodePretty(&pretty.writer, v, .{ .indent = 2 });
+    try encode(&pretty.writer, v, .{ .indent = 2 });
     try testing.expectEqualStrings("{\n  \"o\": {},\n  \"a\": []\n}", pretty.written());
 
     var root_obj: Io.Writer.Allocating = .init(a);
     defer root_obj.deinit();
-    try encodePretty(&root_obj.writer, .{ .object = .empty }, .{ .indent = 2 });
+    try encode(&root_obj.writer, .{ .object = .empty }, .{ .indent = 2 });
     try testing.expectEqualStrings("{}", root_obj.written());
 
     var root_arr: Io.Writer.Allocating = .init(a);
     defer root_arr.deinit();
-    try encodePretty(&root_arr.writer, .{ .array = &.{} }, .{ .indent = 2 });
+    try encode(&root_arr.writer, .{ .array = &.{} }, .{ .indent = 2 });
     try testing.expectEqualStrings("[]", root_arr.written());
 }
 
@@ -423,7 +575,7 @@ test "encode escapes keys and round-trips them" {
     const v = try parse(a, "{\"a\\\"b\": 1}", .{});
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, v);
+    try encode(&aw.writer, v, .{});
     try testing.expectEqualStrings("{\"a\\\"b\":1}", aw.written());
     const back = try parse(a, aw.written(), .{});
     try testing.expectEqual(@as(i64, 1), back.object.get("a\"b").?.integer);
@@ -436,7 +588,7 @@ test "encode deep array compact" {
     const v = try parse(a, "[[[[[1,2],[3]],[]],[4]],5]", .{});
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, v);
+    try encode(&aw.writer, v, .{});
     try testing.expectEqualStrings("[[[[[1,2],[3]],[]],[4]],5]", aw.written());
 }
 
@@ -446,14 +598,14 @@ test "encode rejects NaN and infinities" {
     const a = ar.allocator();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = std.math.nan(f64) }));
-    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = std.math.inf(f64) }));
-    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = -std.math.inf(f64) }));
+    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = std.math.nan(f64) }, .{}));
+    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = std.math.inf(f64) }, .{}));
+    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, .{ .float = -std.math.inf(f64) }, .{}));
 
     // Inf reaches real trees via the parser's overflow-to-float fallback.
     const v = try parse(a, "1e309", .{});
     try testing.expect(std.math.isPositiveInf(v.float));
-    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, v));
+    try testing.expectError(error.UnrepresentableFloat, encode(&aw.writer, v, .{}));
 }
 
 test "encode integer extremes" {
@@ -462,16 +614,16 @@ test "encode integer extremes" {
     const a = ar.allocator();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .integer = std.math.maxInt(i64) });
+    try encode(&aw.writer, .{ .integer = std.math.maxInt(i64) }, .{});
     try testing.expectEqualStrings("9223372036854775807", aw.written());
     aw.clearRetainingCapacity();
-    try encode(&aw.writer, .{ .integer = std.math.minInt(i64) });
+    try encode(&aw.writer, .{ .integer = std.math.minInt(i64) }, .{});
     try testing.expectEqualStrings("-9223372036854775808", aw.written());
     aw.clearRetainingCapacity();
-    try encode(&aw.writer, .{ .integer = std.math.maxInt(i128) });
+    try encode(&aw.writer, .{ .integer = std.math.maxInt(i128) }, .{});
     try testing.expectEqualStrings("170141183460469231731687303715884105727", aw.written());
     aw.clearRetainingCapacity();
-    try encode(&aw.writer, .{ .integer = std.math.minInt(i128) });
+    try encode(&aw.writer, .{ .integer = std.math.minInt(i128) }, .{});
     try testing.expectEqualStrings("-170141183460469231731687303715884105728", aw.written());
 }
 
@@ -481,7 +633,7 @@ test "encode integer-valued float re-parses as float" {
     const a = ar.allocator();
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .float = 1.0 });
+    try encode(&aw.writer, .{ .float = 1.0 }, .{});
     try testing.expectEqualStrings("1.0", aw.written());
     const back = try parse(a, aw.written(), .{});
     try testing.expect(back == .float);
@@ -503,7 +655,7 @@ test "encode float extremes round-trip" {
     for (extremes) |f| {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = f });
+        try encode(&aw.writer, .{ .float = f }, .{});
         const back = try parse(a, aw.written(), .{});
         try testing.expect(back == .float);
         try testing.expectEqual(f, back.float);
@@ -520,7 +672,7 @@ test "encode multi-byte unicode past the SIMD lane boundary" {
     comptime std.debug.assert(std.mem.indexOfScalar(u8, s, '\n').? > 16);
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .string = s });
+    try encode(&aw.writer, .{ .string = s }, .{});
     try testing.expectEqualStrings("\"abcdefghijkl\xe3\x81\x82xy\\ntail\xe3\x81\x84\"", aw.written());
 }
 
@@ -556,7 +708,7 @@ test "encode escapes all 32 control bytes" {
     while (c < 0x20) : (c += 1) {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .string = &.{c} });
+        try encode(&aw.writer, .{ .string = &.{c} }, .{});
         const out = aw.written();
         try testing.expect(out.len >= 4);
         try testing.expectEqual(@as(u8, '\\'), out[1]);
@@ -575,13 +727,13 @@ test "float notation thresholds" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 1e21 });
+        try encode(&aw.writer, .{ .float = 1e21 }, .{});
         try testing.expectEqualStrings("1e21", aw.written());
     }
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 1e20 });
+        try encode(&aw.writer, .{ .float = 1e20 }, .{});
         // 1e20 is integer-valued; decimal render has no '.', so the .0 suffix is appended.
         try testing.expectEqualStrings("100000000000000000000.0", aw.written());
     }
@@ -590,13 +742,13 @@ test "float notation thresholds" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 1e-6 });
+        try encode(&aw.writer, .{ .float = 1e-6 }, .{});
         try testing.expectEqualStrings("0.000001", aw.written());
     }
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 1e-7 });
+        try encode(&aw.writer, .{ .float = 1e-7 }, .{});
         try testing.expectEqualStrings("1e-7", aw.written());
     }
 
@@ -604,7 +756,7 @@ test "float notation thresholds" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 1e300 });
+        try encode(&aw.writer, .{ .float = 1e300 }, .{});
         try testing.expectEqualStrings("1e300", aw.written());
         const back = try parse(a, aw.written(), .{});
         try testing.expectEqual(@as(f64, 1e300), back.float);
@@ -612,7 +764,7 @@ test "float notation thresholds" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = 5e-324 });
+        try encode(&aw.writer, .{ .float = 5e-324 }, .{});
         try testing.expectEqualStrings("5e-324", aw.written());
         const back = try parse(a, aw.written(), .{});
         try testing.expectEqual(@as(f64, 5e-324), back.float);
@@ -622,7 +774,7 @@ test "float notation thresholds" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, .{ .float = -0.0 });
+        try encode(&aw.writer, .{ .float = -0.0 }, .{});
         try testing.expectEqualStrings("-0.0", aw.written());
     }
 }
@@ -645,12 +797,12 @@ test "encode nesting depth guard" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try testing.expectError(error.NestingTooDeep, encode(&aw.writer, inner));
+        try testing.expectError(error.NestingTooDeep, encode(&aw.writer, inner, .{}));
     }
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try testing.expectError(error.NestingTooDeep, encodePretty(&aw.writer, inner, .{}));
+        try testing.expectError(error.NestingTooDeep, encode(&aw.writer, inner, .{ .indent = 2 }));
     }
 
     // A 100-deep chain is within the limit and succeeds.
@@ -664,7 +816,7 @@ test "encode nesting depth guard" {
     {
         var aw: Io.Writer.Allocating = .init(a);
         defer aw.deinit();
-        try encode(&aw.writer, shallow); // must not error
+        try encode(&aw.writer, shallow, .{}); // must not error
     }
 }
 
@@ -684,7 +836,7 @@ test "encode of a very deep Value yields NestingTooDeep, never overflows the sta
     }
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try testing.expectError(error.NestingTooDeep, encode(&aw.writer, inner));
+    try testing.expectError(error.NestingTooDeep, encode(&aw.writer, inner, .{}));
 }
 
 test "encode hand-built ObjectMap insertion order" {
@@ -700,7 +852,7 @@ test "encode hand-built ObjectMap insertion order" {
 
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encode(&aw.writer, .{ .object = map });
+    try encode(&aw.writer, .{ .object = map }, .{});
     // Insertion order: z, a, m.
     try testing.expectEqualStrings("{\"z\":1,\"a\":2,\"m\":3}", aw.written());
 }
@@ -717,7 +869,7 @@ test "encode key with embedded quote via pretty path" {
 
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodePretty(&aw.writer, .{ .object = map }, .{ .indent = 2 });
+    try encode(&aw.writer, .{ .object = map }, .{ .indent = 2 });
     const out = aw.written();
     // The key must be escaped as \"a\\\"b\" in the output line.
     try testing.expect(std.mem.indexOf(u8, out, "\"a\\\"b\"") != null);
@@ -737,7 +889,7 @@ test "encodeTyped honors annotations symmetric with decode" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const cfg: C = .{ .listen_addr = "x", .port = 1 };
-    try encodeTyped(&aw.writer, cfg, a);
+    try encodeTyped(&aw.writer, cfg, a, .{});
     try std.testing.expectEqualStrings("{\"listen-addr\":\"x\",\"port\":1}", aw.written());
 }
 
@@ -749,7 +901,7 @@ test "typed round-trip" {
     const orig: C = .{ .name = "n", .tags = &.{ "a", "b" } };
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(&aw.writer, orig, a);
+    try encodeTyped(&aw.writer, orig, a, .{});
     const back = try parseInto(C, a, aw.written(), .{});
     try std.testing.expectEqualStrings("n", back.name);
     try std.testing.expectEqualStrings("b", back.tags[1]);
@@ -768,7 +920,7 @@ test "encodeTyped: json_flatten inlines inner fields" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const outer: Outer = .{ .name = "foo", .inner = .{ .x = 1, .y = 2 } };
-    try encodeTyped(&aw.writer, outer, a);
+    try encodeTyped(&aw.writer, outer, a, .{});
     try testing.expectEqualStrings("{\"name\":\"foo\",\"x\":1,\"y\":2}", aw.written());
 }
 
@@ -784,12 +936,12 @@ test "encodeTyped: tagged union emits discriminator first" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const http: Plugin = .{ .http = .{ .port = 80 } };
-    try encodeTyped(&aw.writer, http, a);
+    try encodeTyped(&aw.writer, http, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"http\",\"port\":80,\"secure\":false}", aw.written());
 
     aw.clearRetainingCapacity();
     const none: Plugin = .none;
-    try encodeTyped(&aw.writer, none, a);
+    try encodeTyped(&aw.writer, none, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"none\"}", aw.written());
 }
 
@@ -801,7 +953,7 @@ test "encodeTyped: enum emits tag name string" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .mode = .slow };
-    try encodeTyped(&aw.writer, c, a);
+    try encodeTyped(&aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"mode\":\"slow\"}", aw.written());
 }
 
@@ -823,7 +975,7 @@ test "encodeTyped: toJson hook overrides built-in encoding" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .v = .{ .major = 1, .minor = 2, .patch = 3 } };
-    try encodeTyped(&aw.writer, c, a);
+    try encodeTyped(&aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"v\":\"1.2.3\"}", aw.written());
 }
 
@@ -835,7 +987,7 @@ test "encodeTyped: null optional omitted, non-null present" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .a = null, .b = 2 };
-    try encodeTyped(&aw.writer, c, a);
+    try encodeTyped(&aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"b\":2}", aw.written());
 
     // The omitted key decodes back to null: lossless round-trip.
@@ -853,7 +1005,7 @@ test "encodeTyped: embedded Value encodes dynamically" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .meta = meta, .n = 5 };
-    try encodeTyped(&aw.writer, c, a);
+    try encodeTyped(&aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"meta\":{\"a\":[1,2]},\"n\":5}", aw.written());
 }
 
@@ -865,7 +1017,7 @@ test "encodeTyped: NaN float is unrepresentable" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .x = std.math.nan(f64) };
-    try testing.expectError(error.UnrepresentableFloat, encodeTyped(&aw.writer, c, a));
+    try testing.expectError(error.UnrepresentableFloat, encodeTyped(&aw.writer, c, a, .{}));
 }
 
 test "encodeTyped: fixed array encodes as JSON array" {
@@ -876,7 +1028,7 @@ test "encodeTyped: fixed array encodes as JSON array" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .rgb = .{ 1, 2, 3 } };
-    try encodeTyped(&aw.writer, c, a);
+    try encodeTyped(&aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"rgb\":[1,2,3]}", aw.written());
 }
 
@@ -906,7 +1058,7 @@ test "encodeTyped: full annotation round-trip" {
     };
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(&aw.writer, orig, a);
+    try encodeTyped(&aw.writer, orig, a, .{});
     try testing.expectEqualStrings(
         "{\"listen-addr\":\"x\",\"verbose\":true,\"plugin\":{\"kind\":\"http\",\"port\":80}}",
         aw.written(),
@@ -917,4 +1069,139 @@ test "encodeTyped: full annotation round-trip" {
     try testing.expectEqual(@as(u32, 7), back.runtime);
     try testing.expectEqual(true, back.common.verbose);
     try testing.expectEqual(@as(u16, 80), back.plugin.http_server.port);
+}
+
+// sort_keys
+
+test "sort_keys: Value object in lexicographic order, default keeps insertion" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var map: value_mod.ObjectMap = .empty;
+    try map.put(a, "z", .{ .integer = 1 });
+    try map.put(a, "a", .{ .integer = 2 });
+    try map.put(a, "m", .{ .integer = 3 });
+
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try encode(&aw.writer, .{ .object = map }, .{ .sort_keys = true });
+    try testing.expectEqualStrings("{\"a\":2,\"m\":3,\"z\":1}", aw.written());
+
+    aw.clearRetainingCapacity();
+    try encode(&aw.writer, .{ .object = map }, .{});
+    try testing.expectEqualStrings("{\"z\":1,\"a\":2,\"m\":3}", aw.written());
+}
+
+test "sort_keys: Value recurses into nested objects, pretty" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v = try parse(a, "{\"b\":{\"y\":1,\"x\":2},\"a\":3}", .{});
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try encode(&aw.writer, v, .{ .indent = 2, .sort_keys = true });
+    const expected =
+        "{\n" ++
+        "  \"a\": 3,\n" ++
+        "  \"b\": {\n" ++
+        "    \"x\": 2,\n" ++
+        "    \"y\": 1\n" ++
+        "  }\n" ++
+        "}";
+    try testing.expectEqualStrings(expected, aw.written());
+}
+
+test "sort_keys: byte-lexicographic order (uppercase sorts before lowercase)" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v = try parse(a, "{\"b\":1,\"A\":2,\"a\":3,\"B\":4}", .{});
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try encode(&aw.writer, v, .{ .sort_keys = true });
+    // ASCII bytes: 'A'(65) 'B'(66) 'a'(97) 'b'(98). Not JCS UTF-16 order.
+    try testing.expectEqualStrings("{\"A\":2,\"B\":4,\"a\":3,\"b\":1}", aw.written());
+}
+
+test "sort_keys: empty object stays {}" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    try encode(&aw.writer, .{ .object = .empty }, .{ .sort_keys = true });
+    try testing.expectEqualStrings("{}", aw.written());
+    aw.clearRetainingCapacity();
+    try encodeTyped(&aw.writer, .{}, a, .{ .sort_keys = true });
+    try testing.expectEqualStrings("{}", aw.written());
+}
+
+test "sort_keys: typed struct fields in key order, default keeps declaration" {
+    const C = struct { zebra: u8, apple: u8, mango: u8 };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .zebra = 1, .apple = 2, .mango = 3 };
+    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    try testing.expectEqualStrings("{\"apple\":2,\"mango\":3,\"zebra\":1}", aw.written());
+
+    aw.clearRetainingCapacity();
+    try encodeTyped(&aw.writer, c, a, .{});
+    try testing.expectEqualStrings("{\"zebra\":1,\"apple\":2,\"mango\":3}", aw.written());
+}
+
+test "sort_keys: typed sorts by emitted (renamed) key, recursively" {
+    const Inner = struct { yy: u8, xx: u8 };
+    const C = struct {
+        pub const json_rename = .{ .zed = "aaa" };
+        zed: u8,
+        bbb: Inner,
+    };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .zed = 1, .bbb = .{ .yy = 2, .xx = 3 } };
+    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    // "aaa" (zed renamed) sorts before "bbb"; inner sorts xx before yy.
+    try testing.expectEqualStrings("{\"aaa\":1,\"bbb\":{\"xx\":3,\"yy\":2}}", aw.written());
+}
+
+test "sort_keys: flattened fields sort merged into the parent object" {
+    const Inner = struct { m: u8, a: u8 };
+    const C = struct {
+        pub const json_flatten = .{"inner"};
+        z: u8,
+        inner: Inner,
+        b: u8,
+    };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .z = 1, .inner = .{ .m = 2, .a = 3 }, .b = 4 };
+    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    // Flattened a,m interleave with z,b under one sort: a,b,m,z.
+    try testing.expectEqualStrings("{\"a\":3,\"b\":4,\"m\":2,\"z\":1}", aw.written());
+}
+
+test "sort_keys: tagged union discriminator sorts among the payload" {
+    const Plugin = union(enum) {
+        pub const json_tag = "kind";
+        http: struct { port: u16, addr: u8 },
+        none,
+    };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const http: Plugin = .{ .http = .{ .port = 80, .addr = 1 } };
+    try encodeTyped(&aw.writer, http, a, .{ .sort_keys = true });
+    // keys addr, kind, port in order (kind is the discriminator).
+    try testing.expectEqualStrings("{\"addr\":1,\"kind\":\"http\",\"port\":80}", aw.written());
 }

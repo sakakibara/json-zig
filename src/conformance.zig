@@ -180,7 +180,7 @@ fn roundTrips(src: []const u8, dialect: json.Dialect) !bool {
     const first = try json.parse(a, src, .{ .dialect = dialect });
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    json.encode(&aw.writer, first) catch |err| switch (err) {
+    json.encode(&aw.writer, first, .{}) catch |err| switch (err) {
         error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
         error.UnrepresentableFloat, error.NestingTooDeep => return false,
     };

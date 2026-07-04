@@ -1346,7 +1346,7 @@ test "wide-int round-trip: u64 max via encodeTyped -> parseInto" {
     const orig: S = .{ .n = std.math.maxInt(u64) };
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encoder_mod.encodeTyped(&aw.writer, orig, a);
+    try encoder_mod.encodeTyped(&aw.writer, orig, a, .{});
     // "18446744073709551615" must appear verbatim in the encoded output.
     try testing.expect(std.mem.indexOf(u8, aw.written(), "18446744073709551615") != null);
     const back = try parseInto(S, a, aw.written(), .{});

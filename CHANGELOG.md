@@ -6,6 +6,25 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `encode` and `encodeTyped` take an `EncodeOptions` argument,
+  and `encodePretty` / `PrettyOptions` are removed (folded in). Migrate
+  `encode(w, v)` to `encode(w, v, .{})`, `encodePretty(w, v, .{ .indent = 2 })`
+  to `encode(w, v, .{ .indent = 2 })`, and `encodeTyped(w, v, arena)` to
+  `encodeTyped(w, v, arena, .{})`. Default options reproduce the prior output
+  byte-for-byte.
+
+### Added
+
+- `EncodeOptions.sort_keys`: emit object members (and struct fields) in
+  ascending byte-lexicographic key order, recursively, on both the `Value`
+  and typed paths. Default `false` preserves insertion / declaration order.
+  Byte-lexicographic, not RFC 8785 (JCS) canonical ordering.
+- `EncodeOptions.indent` now applies to `encodeTyped` too, so typed values
+  pretty-print (previously compact only). One options surface (`indent` +
+  `sort_keys`) is shared by `encode` and `encodeTyped`.
+
 ## [0.1.1] - 2026-07-05
 
 ### Fixed

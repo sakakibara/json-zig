@@ -230,6 +230,7 @@ const Failure = error{
     ReparseFailed,
     TypedDivergence,
     RoundTripMismatch,
+    SortNotStable,
     ParseDocumentDisagree,
     EmitNotLossless,
     StreamAcceptRejectMismatch,
@@ -251,6 +252,7 @@ fn checkInput(a: std.mem.Allocator, random: Random, input: []const u8) Failure!v
         };
 
         if (parsed) |value| try checkRoundTrip(a, value);
+        if (parsed) |value| try checkSortStable(a, value);
         try checkDocument(a, input, dialect, parsed != null);
         try checkRawMode(a, input, dialect);
         try checkFeedSplit(a, random, input, dialect, parsed != null);
@@ -343,7 +345,7 @@ fn checkRawMode(a: std.mem.Allocator, input: []const u8, dialect: json.Dialect) 
     };
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    json.encode(&aw.writer, value) catch |err| switch (err) {
+    json.encode(&aw.writer, value, .{}) catch |err| switch (err) {
         error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
         // Raw mode emits verbatim lexemes; floats never reach the encoder.
         error.UnrepresentableFloat, error.NestingTooDeep => return error.EncodeFailed,
@@ -358,13 +360,31 @@ fn checkRawMode(a: std.mem.Allocator, input: []const u8, dialect: json.Dialect) 
 fn checkRoundTrip(a: std.mem.Allocator, value: json.Value) Failure!void {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    json.encode(&aw.writer, value) catch |err| switch (err) {
+    json.encode(&aw.writer, value, .{}) catch |err| switch (err) {
         error.UnrepresentableFloat => return,
         error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
         error.NestingTooDeep => return error.EncodeFailed,
     };
     const reparsed = json.parse(a, aw.written(), .{}) catch return error.ReparseFailed;
     if (!valueEql(value, reparsed)) return error.RoundTripMismatch;
+}
+
+/// sort_keys invariant: encoding with `sort_keys` is stable. Re-parsing the
+/// sorted output and re-encoding it with `sort_keys` must yield byte-for-byte
+/// the same JSON, so the key order is deterministic and idempotent.
+fn checkSortStable(a: std.mem.Allocator, value: json.Value) Failure!void {
+    var first: std.Io.Writer.Allocating = .init(a);
+    defer first.deinit();
+    json.encode(&first.writer, value, .{ .sort_keys = true }) catch |err| switch (err) {
+        error.UnrepresentableFloat => return,
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+        error.NestingTooDeep => return error.EncodeFailed,
+    };
+    const reparsed = json.parse(a, first.written(), .{}) catch return error.ReparseFailed;
+    var second: std.Io.Writer.Allocating = .init(a);
+    defer second.deinit();
+    json.encode(&second.writer, reparsed, .{ .sort_keys = true }) catch return error.EncodeFailed;
+    if (!std.mem.eql(u8, first.written(), second.written())) return error.SortNotStable;
 }
 
 /// Invariant 3: `Document.parse` agrees with `parse` on accept/reject,
