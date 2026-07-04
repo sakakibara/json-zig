@@ -11,11 +11,15 @@ env:
 
 jobs:
   test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os:
+          - ubuntu-latest      # x86_64-linux
+          - ubuntu-24.04-arm   # aarch64-linux
+          - macos-latest       # aarch64-macos
     steps:
       - uses: actions/checkout@v4
       - name: install zig
@@ -31,40 +35,36 @@ jobs:
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
           echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - name: Test
+      - name: test
         run: zig build test --summary all
-      - name: Build examples
+      - name: build examples
         run: zig build examples
 
+  # Cross-compile only (no test execution). Covers the width, endianness,
+  # and ISA axes not exercised by the native `test` runners.
   cross-compile:
+    name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target:
-          - x86_64-linux
-          - aarch64-linux
-          - x86_64-macos
-          - aarch64-macos
-          - x86_64-windows
-          - aarch64-windows
-          - wasm32-wasi
+          - x86_64-macos          # Intel macOS
+          - aarch64-windows       # ARM Windows
+          - x86-linux             # 32-bit little-endian
+          - arm-linux-gnueabihf   # 32-bit little-endian (ARM)
+          - mips-linux-gnueabihf  # 32-bit big-endian
+          - powerpc64-linux-gnu   # 64-bit big-endian
+          - riscv64-linux-gnu     # 64-bit little-endian (RISC-V)
+          - wasm32-wasi           # 32-bit wasm
     steps:
       - uses: actions/checkout@v4
       - name: install zig
         shell: bash
         run: |
-          case "${{ runner.os }}-${{ runner.arch }}" in
-            Linux-X64)    triple=x86_64-linux ;;
-            Linux-ARM64)  triple=aarch64-linux ;;
-            macOS-ARM64)  triple=aarch64-macos ;;
-            *) echo "unsupported runner: ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
-          esac
-          url="https://ziglang.org/download/${ZIG_VERSION}/zig-${triple}-${ZIG_VERSION}.tar.xz"
+          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
-          echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - name: Build (fuzzer, ReleaseFast)
-        run: zig build -Dtarget=${{ matrix.target }}
-      - name: Build examples
-        run: zig build examples -Dtarget=${{ matrix.target }}
+          echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: build for ${{ matrix.target }}
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
