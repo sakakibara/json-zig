@@ -1,0 +1,4 @@
+# Force LF on checkout across all platforms. GitHub's Windows runners default
+# to core.autocrlf=true, which can rewrite vendored test corpora to CRLF and
+# corrupt byte-exact conformance vectors. Keep line endings canonical (LF).
+* text=auto eol=lf
