@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-05
+
+### Fixed
+
+- 32-bit targets now compile. `u64` span offsets are cast to `usize` at
+  slice-indexing and loop-index sites that failed to build where `usize`
+  is 32-bit (e.g. `wasm32-wasi`). No API or behavior change on 64-bit
+  targets.
+
 ## [0.1.0] - 2026-07-03
 
 Initial release. RFC 8259 JSON (and JSONC) parser, encoder, typed codec,
@@ -63,5 +72,6 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/sakakibara/json-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/json-zig/releases/tag/v0.1.0
