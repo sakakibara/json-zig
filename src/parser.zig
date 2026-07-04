@@ -253,7 +253,7 @@ pub const Parser = struct {
         return value;
     }
 
-    // ----- error funnel -----
+    // Error funnel
 
     /// Every parse failure routes through here (or a wrapper below):
     /// records a Diagnostic when an error sink is set, then returns
@@ -321,7 +321,7 @@ pub const Parser = struct {
         };
     }
 
-    // ----- span recording -----
+    // Span recording
 
     /// Append `.segment` to the current path (separator dropped at the
     /// root), returning the previous length for `popPath`. No-op when
@@ -360,7 +360,7 @@ pub const Parser = struct {
         try sm.put(self.arena, path, .{ .start = start.start, .end = end });
     }
 
-    // ----- recovery -----
+    // Recovery
 
     const Terminator = enum { comma, close, eof };
 
@@ -687,7 +687,7 @@ fn parseIntFast(raw: []const u8) ?i128 {
     return if (neg) -signed else signed;
 }
 
-// ----- tests -----
+// Tests
 
 const testing = std.testing;
 

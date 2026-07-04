@@ -322,7 +322,7 @@ pub const Document = struct {
         try w.writeAll(self.source);
     }
 
-    // ----- edit machinery -----
+    // Edit machinery
 
     /// Splice `replacement` over `source[start..end)`, then revalidate
     /// and rebuild the node tree and parsed view against the new bytes.
@@ -428,7 +428,7 @@ pub const Document = struct {
         };
     }
 
-    // ----- path resolution over the node tree -----
+    // Path resolution over the node tree
 
     const Resolved = struct {
         node: *Node,
@@ -678,7 +678,7 @@ fn valueFromAny(arena: Allocator, comptime T: type, value: T) Error!Value {
     };
 }
 
-// ----- tests -----
+// Tests
 
 test "unmodified emit is byte-identical incl jsonc trivia" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);

@@ -26,7 +26,7 @@ pub fn main() !void {
     defer arena.deinit();
     const a = arena.allocator();
 
-    // --- spans demo ---
+    // Spans demo
     var spans: json.Spans = .empty;
     const v = try json.parse(a, src, .{ .spans = &spans });
 
@@ -43,7 +43,7 @@ pub fn main() !void {
     const tag1 = v.locate(spans, "tags[1]").?;
     std.debug.print("tags[1] raw:       {s}\n", .{src[@intCast(tag1.span.start)..@intCast(tag1.span.end)]});
 
-    // --- diagnostic rendering demo ---
+    // Diagnostic rendering demo
     std.debug.print("\n--- parse error in bad input ---\n", .{});
 
     var errs: std.ArrayList(json.Diagnostic) = .empty;

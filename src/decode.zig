@@ -574,7 +574,7 @@ fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: parser_
     }
 }
 
-// ----- streaming typed decode (no Value tree) -----
+// Streaming typed decode (no Value tree)
 
 const tokenizer_mod = @import("tokenizer.zig");
 const RawToken = tokenizer_mod.RawToken;
@@ -1444,7 +1444,7 @@ test "wide-int Document.set u64 max succeeds; u128 above i128 max returns error"
     try testing.expectError(error.InvalidValue, doc.set("x", @as(u128, std.math.maxInt(u128))));
 }
 
-// ----- streaming typed decode -----
+// Streaming typed decode
 
 /// Allocator wrapper that counts bytes handed out. Used to bound the
 /// allocation cost of the streaming typed decode path.
