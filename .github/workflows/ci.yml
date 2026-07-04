@@ -20,9 +20,11 @@ jobs:
           - ubuntu-latest      # x86_64-linux
           - ubuntu-24.04-arm   # aarch64-linux
           - macos-latest       # aarch64-macos
+          - windows-latest     # x86_64-windows
     steps:
       - uses: actions/checkout@v4
-      - name: install zig
+      - name: install zig (unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           case "${{ runner.os }}-${{ runner.arch }}" in
@@ -35,6 +37,16 @@ jobs:
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
           echo "$HOME/zig/zig-${triple}-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: install zig (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          $dst = Join-Path $env:USERPROFILE 'zig'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Invoke-WebRequest -Uri $url -OutFile zig.zip
+          Expand-Archive -LiteralPath zig.zip -DestinationPath $dst
+          "$dst\zig-x86_64-windows-$env:ZIG_VERSION" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: test
         run: zig build test --summary all
       - name: build examples
