@@ -38,10 +38,10 @@ pub fn main() !void {
     std.debug.print("server.port span:  bytes {d}-{d}  line {d} col {d}\n", .{
         port.span.start, port.span.end, lc.line, lc.col,
     });
-    std.debug.print("server.port raw:   {s}\n", .{src[port.span.start..port.span.end]});
+    std.debug.print("server.port raw:   {s}\n", .{src[@intCast(port.span.start)..@intCast(port.span.end)]});
 
     const tag1 = v.locate(spans, "tags[1]").?;
-    std.debug.print("tags[1] raw:       {s}\n", .{src[tag1.span.start..tag1.span.end]});
+    std.debug.print("tags[1] raw:       {s}\n", .{src[@intCast(tag1.span.start)..@intCast(tag1.span.end)]});
 
     // --- diagnostic rendering demo ---
     std.debug.print("\n--- parse error in bad input ---\n", .{});

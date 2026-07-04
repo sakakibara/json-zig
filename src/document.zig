@@ -549,7 +549,7 @@ fn buildNode(arena: Allocator, source: []const u8, toks: []const Token, i: *usiz
                 if (i.* >= toks.len or toks[i.*].kind != .colon) return error.JsonParseError;
                 i.* += 1;
                 const value = try buildNode(arena, source, toks, i, depth + 1, max_depth);
-                const key_content = source[key_tok.span.start + 1 .. key_tok.span.end - 1];
+                const key_content = source[@intCast(key_tok.span.start + 1) .. @intCast(key_tok.span.end - 1)];
                 try members.append(arena, .{
                     .key = .{
                         .decoded = try parser_mod.decodeStringContent(arena, key_content),

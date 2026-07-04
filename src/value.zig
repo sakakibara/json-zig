@@ -49,10 +49,10 @@ pub const Span = struct {
     /// is the byte count since the last newline, plus one. Both saturate at
     /// `maxInt(u32)` for absurdly large inputs.
     pub fn lineCol(self: Span, src: []const u8) LineCol {
-        const limit = @min(self.start, src.len);
+        const limit: usize = @intCast(@min(self.start, src.len));
         var line: u64 = 1;
-        var line_start: u64 = 0;
-        var i: u64 = 0;
+        var line_start: usize = 0;
+        var i: usize = 0;
         while (i < limit) : (i += 1) {
             if (src[i] == '\n') {
                 line += 1;
