@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-05
+
 ### Changed
 
 - **BREAKING:** `encode` and `encodeTyped` take an `EncodeOptions` argument,
@@ -91,6 +93,7 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/sakakibara/json-zig/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/sakakibara/json-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/json-zig/releases/tag/v0.1.0
