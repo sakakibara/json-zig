@@ -21,8 +21,10 @@ const testing = std.testing;
 const lex = @import("lex.zig");
 const value_mod = @import("value.zig");
 const decode_mod = @import("decode.zig");
+const codec_mod = @import("codec.zig");
 
 pub const Value = value_mod.Value;
+pub const AnnotationsSource = codec_mod.AnnotationsSource;
 
 /// Writer failures, plus `UnrepresentableFloat` when a `.float` holds
 /// NaN or +/-Inf (JSON has no token for them; such values can enter a
@@ -77,14 +79,18 @@ pub fn encode(w: *Io.Writer, value: Value, options: EncodeOptions) EncodeError!v
 }
 
 /// Encode a typed Zig value as compact JSON, consulting the same
-/// `json_rename` / `json_skip` / `json_flatten` / `json_tag` annotations
-/// and `toJson` hooks that typed decoding consults, so output decodes
-/// back via `parseInto(T, ...)`.
+/// `Annotations(T)` and `json_rename` / `json_skip` /
+/// `json_flatten` / `json_tag` annotations and `toJson` hooks that
+/// typed decoding consults, so output decodes back via
+/// `parseInto(T, ...)`.
 ///
-/// Annotations and hooks are read from `@TypeOf(value)`. Bind an
-/// anonymous struct literal to the annotated type before passing it:
-/// an anonymous literal has its own type, which carries no declarations,
-/// so annotation-driven behavior would silently not apply.
+/// Annotations and hooks are read from `Annotations(T)` and `@TypeOf(value)`.
+/// `codec_priority` sets source where hooks are provided from.
+///
+/// Bind an anonymous struct literal to the annotated type before passing
+/// it: an anonymous literal has its own type, which carries no
+/// declarations, so annotation-driven behavior would silently not apply.
+/// `TAnnotation` fields are compile-checked earlier.
 ///
 /// Integer round-trip: integer fields are emitted at full width, so a
 /// u64 field emits all 64 bits (e.g. "18446744073709551615"). `parseInto`
@@ -105,31 +111,51 @@ pub fn encode(w: *Io.Writer, value: Value, options: EncodeOptions) EncodeError!v
 /// precision. Round-tripping such a value requires `number_mode = .raw` on
 /// the decode side, targeting a type wide enough (e.g. u128 or a custom
 /// `fromJson` hook).
-pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
+pub fn encodeTyped(comptime TCodec: type, comptime codec_priority: AnnotationsSource, w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
     const T = @TypeOf(value);
-    try writeTypedValue(T, value, w, arena, options, 0);
+    try writeTypedValue(T, TCodec, codec_priority, value, w, arena, options, 0);
 }
 
-fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn ToJsonCb(comptime T: type) type {
+    return *const fn (self: T, arena: std.mem.Allocator) std.mem.Allocator.Error!Value;
+}
+
+fn getToJsonCb(comptime T: type, comptime TCodec: type, comptime behavior: AnnotationsSource) ?ToJsonCb(T) {
+    return switch (behavior) {
+        .codec_only => codecToJsonCb(T, TCodec),
+        .codec_then_local => codecToJsonCb(T, TCodec) orelse localToJsonCb(T),
+        .local_then_codec => localToJsonCb(T) orelse codecToJsonCb(T, TCodec),
+        .local_only => localToJsonCb(T),
+    };
+}
+
+fn localToJsonCb(comptime T: type) ?ToJsonCb(T) {
+    if (!@hasDecl(T, "toJson")) return null;
+    return T.toJson;
+}
+
+fn codecToJsonCb(comptime T: type, comptime TCodec: type) ?ToJsonCb(T) {
+    const annotations = TCodec.getOrEmpty(T) orelse return null;
+    return annotations.toJson;
+}
+
+fn writeTypedValue(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     if (depth > max_encode_depth) return error.NestingTooDeep;
     if (T == Value) return writeValue(w, value, options, depth);
 
     // Custom toJson hook short-circuit, symmetric with decode's fromJson.
-    if (comptime (@typeInfo(T) == .@"struct" and @hasDecl(T, "toJson"))) {
-        comptime {
-            const fn_info = @typeInfo(@TypeOf(T.toJson)).@"fn";
-            if (fn_info.params.len != 2) {
-                @compileError(@typeName(T) ++ ".toJson must take exactly 2 params: (Self, Allocator)");
-            }
+    if (comptime (@typeInfo(T) == .@"struct")) {
+        if (comptime (getToJsonCb(T, TCodec, codec_priority))) |cb| {
+            const hooked = cb(value, arena) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+            };
+            return writeValue(w, hooked, options, depth);
         }
-        const hooked = T.toJson(value, arena) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        return writeValue(w, hooked, options, depth);
     }
 
-    if (comptime (@typeInfo(T) == .@"union" and @hasDecl(T, "json_tag"))) {
-        return writeTypedTaggedUnion(T, value, w, arena, options, depth);
+    if (comptime (@typeInfo(T) == .@"union")) {
+        const tag = comptime decode_mod.getJsonTag(T, TCodec, codec_priority);
+        return writeTypedTaggedUnion(T, TCodec, codec_priority, tag, value, w, arena, options, depth);
     }
 
     switch (@typeInfo(T)) {
@@ -139,20 +165,20 @@ fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.All
         .pointer => |p| {
             if (p.size != .slice) @compileError("json encodeTyped: only slice pointers supported, got " ++ @typeName(T));
             if (p.child == u8 and p.is_const) return writeQuotedString(w, value);
-            try writeTypedArray(p.child, value, w, arena, options, depth);
+            try writeTypedArray(p.child, TCodec, codec_priority, value, w, arena, options, depth);
         },
-        .array => |a| try writeTypedArray(a.child, &value, w, arena, options, depth),
+        .array => |a| try writeTypedArray(a.child, TCodec, codec_priority, &value, w, arena, options, depth),
         .optional => |o| {
             // A null optional reaching this point sits inside an array (or
             // at the root), where there is no object member to omit, so it
             // emits JSON null. Struct fields omit null optionals upstream.
             if (value) |inner| {
-                try writeTypedValue(o.child, inner, w, arena, options, depth);
+                try writeTypedValue(o.child, TCodec, codec_priority, inner, w, arena, options, depth);
             } else {
                 try w.writeAll("null");
             }
         },
-        .@"struct" => try writeTypedObject(T, value, w, arena, options, depth),
+        .@"struct" => try writeTypedObject(T, TCodec, codec_priority, value, w, arena, options, depth),
         .@"enum" => try writeQuotedString(w, @tagName(value)),
         else => @compileError("json encodeTyped: unsupported type " ++ @typeName(T)),
     }
@@ -162,23 +188,23 @@ fn writeTypedValue(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.All
 /// this streams members in declaration order (flattened fields inline);
 /// with it, members (flattened ones included) are buffered and emitted in
 /// ascending key order.
-fn writeTypedObject(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn writeTypedObject(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     comptime decode_mod.validateAnnotations(T);
-    if (options.sort_keys) return writeTypedObjectSorted(T, value, w, arena, options, depth);
+    if (options.sort_keys) return writeTypedObjectSorted(T, TCodec, codec_priority, value, w, arena, options, depth);
     try w.writeByte('{');
     var first = true;
-    try writeTypedStructFields(T, value, w, arena, options, depth, &first);
+    try writeTypedStructFields(T, TCodec, codec_priority, value, w, arena, options, depth, &first);
     if (!first) try newlineIndent(w, options.indent, depth);
     try w.writeByte('}');
 }
 
-fn writeTypedArray(comptime Child: type, items: []const Child, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn writeTypedArray(comptime Child: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, items: []const Child, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     if (items.len == 0) return w.writeAll("[]");
     try w.writeByte('[');
     for (items, 0..) |item, i| {
         if (i > 0) try w.writeByte(',');
         try newlineIndent(w, options.indent, depth + 1);
-        try writeTypedValue(Child, item, w, arena, options, depth + 1);
+        try writeTypedValue(Child, TCodec, codec_priority, item, w, arena, options, depth + 1);
     }
     try newlineIndent(w, options.indent, depth);
     try w.writeByte(']');
@@ -188,23 +214,23 @@ fn writeTypedArray(comptime Child: type, items: []const Child, w: *Io.Writer, ar
 /// flattened fields and tagged-union payloads inline into the parent
 /// object. `first` carries comma state across recursion levels; members
 /// sit at `depth + 1`.
-fn writeTypedStructFields(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize, first: *bool) EncodeError!void {
+fn writeTypedStructFields(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize, first: *bool) EncodeError!void {
     inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (comptime decode_mod.isSkipped(T, field.name)) continue;
+        if (comptime decode_mod.isSkipped(T, TCodec, codec_priority, field.name)) continue;
         const fv = @field(value, field.name);
-        if (comptime decode_mod.isFlattened(T, field.name)) {
+        if (comptime decode_mod.isFlattened(T, TCodec, codec_priority, field.name)) {
             comptime decode_mod.validateAnnotations(field.type);
-            try writeTypedStructFields(field.type, fv, w, arena, options, depth, first);
+            try writeTypedStructFields(field.type, TCodec, codec_priority, fv, w, arena, options, depth, first);
         } else if (comptime @typeInfo(field.type) == .optional) {
             // Null optionals are omitted; decode maps the absent key back
             // to null, so the round-trip is lossless.
             if (fv) |inner| {
-                try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), options, depth + 1, first);
-                try writeTypedValue(@typeInfo(field.type).optional.child, inner, w, arena, options, depth + 1);
+                try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, codec_priority, field.name), options, depth + 1, first);
+                try writeTypedValue(@typeInfo(field.type).optional.child, TCodec, codec_priority, inner, w, arena, options, depth + 1);
             }
         } else {
-            try writeTypedMember(w, comptime decode_mod.renamedKey(T, field.name), options, depth + 1, first);
-            try writeTypedValue(field.type, fv, w, arena, options, depth + 1);
+            try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, codec_priority, field.name), options, depth + 1, first);
+            try writeTypedValue(field.type, TCodec, codec_priority, fv, w, arena, options, depth + 1);
         }
     }
 }
@@ -218,18 +244,23 @@ fn writeTypedMember(w: *Io.Writer, key: []const u8, options: EncodeOptions, dept
     if (options.indent != null) try w.writeByte(' ');
 }
 
-fn writeTypedTaggedUnion(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, comptime tag_field: []const u8, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     comptime decode_mod.validateAnnotations(T);
-    if (options.sort_keys) return writeTypedTaggedUnionSorted(T, value, w, arena, options, depth);
+    if (options.sort_keys) return writeTypedTaggedUnionSorted(T, TCodec, codec_priority, tag_field, value, w, arena, options, depth);
     const active = std.meta.activeTag(value);
     try w.writeByte('{');
     var first = true;
     inline for (@typeInfo(T).@"union".fields) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
-            try writeTypedMember(w, T.json_tag, options, depth + 1, &first);
-            try writeQuotedString(w, comptime decode_mod.renamedKey(T, union_field.name));
+            try writeTypedMember(w, tag_field, options, depth + 1, &first);
+            try writeQuotedString(w, comptime decode_mod.renamedKey(T, TCodec, codec_priority, union_field.name));
             if (union_field.type != void) {
-                try writeTypedStructFields(union_field.type, @field(value, union_field.name), w, arena, options, depth, &first);
+                if (comptime decode_mod.getJsonPayload(T, TCodec, codec_priority)) |payload| {
+                    try writeTypedMember(w, payload, options, depth + 1, &first);
+                    try writeTypedValue(union_field.type, TCodec, codec_priority, @field(value, union_field.name), w, arena, options, depth + 1);
+                } else {
+                    try writeTypedStructFields(union_field.type, TCodec, codec_priority, @field(value, union_field.name), w, arena, options, depth, &first);
+                }
             }
         }
     }
@@ -248,23 +279,35 @@ fn typedMemberLess(_: void, a: TypedMember, b: TypedMember) bool {
     return std.mem.lessThan(u8, a.key, b.key);
 }
 
-fn writeTypedObjectSorted(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn writeTypedObjectSorted(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     var members: std.ArrayList(TypedMember) = .empty;
-    try collectTypedMembers(T, value, arena, options, depth + 1, &members);
+    try collectTypedMembers(T, TCodec, codec_priority, value, arena, options, depth + 1, &members);
     try emitSortedTypedMembers(w, members.items, options, depth);
 }
 
-fn writeTypedTaggedUnionSorted(comptime T: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
+fn writeTypedTaggedUnionSorted(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, comptime tag_field: []const u8, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     const active = std.meta.activeTag(value);
     var members: std.ArrayList(TypedMember) = .empty;
     inline for (@typeInfo(T).@"union".fields) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
             try members.append(arena, .{
-                .key = T.json_tag,
-                .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, union_field.name)),
+                .key = tag_field,
+                .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, TCodec, codec_priority, union_field.name)),
             });
+
             if (union_field.type != void) {
-                try collectTypedMembers(union_field.type, @field(value, union_field.name), arena, options, depth + 1, &members);
+                if (comptime decode_mod.getJsonPayload(T, TCodec, codec_priority)) |json_payload| {
+                    const names = [_][]const u8{json_payload};
+                    const types = [_]type{union_field.type};
+                    const atts = [_]std.builtin.Type.StructField.Attributes{.{}};
+
+                    const Payload = @Struct(.auto, null, &names, &types, &atts);
+                    var payload: Payload = undefined;
+                    @field(payload, json_payload) = @field(value, union_field.name);
+                    try writeTypedValue(Payload, TCodec, codec_priority, payload, w, arena, options, depth + 1);
+                } else {
+                    try collectTypedMembers(union_field.type, TCodec, codec_priority, @field(value, union_field.name), arena, options, depth + 1, &members);
+                }
             }
         }
     }
@@ -293,24 +336,24 @@ fn emitSortedTypedMembers(w: *Io.Writer, members: []TypedMember, options: Encode
 /// Recursively gather a struct's emitted members (flattened fields promoted
 /// into the parent, skipped fields dropped, null optionals omitted), each
 /// value rendered to JSON at `member_depth`.
-fn collectTypedMembers(comptime T: type, value: T, arena: std.mem.Allocator, options: EncodeOptions, member_depth: usize, members: *std.ArrayList(TypedMember)) EncodeError!void {
+fn collectTypedMembers(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, arena: std.mem.Allocator, options: EncodeOptions, member_depth: usize, members: *std.ArrayList(TypedMember)) EncodeError!void {
     inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (comptime decode_mod.isSkipped(T, field.name)) continue;
+        if (comptime decode_mod.isSkipped(T, TCodec, codec_priority, field.name)) continue;
         const fv = @field(value, field.name);
-        if (comptime decode_mod.isFlattened(T, field.name)) {
+        if (comptime decode_mod.isFlattened(T, TCodec, codec_priority, field.name)) {
             comptime decode_mod.validateAnnotations(field.type);
-            try collectTypedMembers(field.type, fv, arena, options, member_depth, members);
+            try collectTypedMembers(field.type, TCodec, codec_priority, fv, arena, options, member_depth, members);
         } else if (comptime @typeInfo(field.type) == .optional) {
             if (fv) |inner| {
                 try members.append(arena, .{
-                    .key = comptime decode_mod.renamedKey(T, field.name),
-                    .json = try renderTypedValue(@typeInfo(field.type).optional.child, inner, arena, options, member_depth),
+                    .key = comptime decode_mod.renamedKey(T, TCodec, codec_priority, field.name),
+                    .json = try renderTypedValue(@typeInfo(field.type).optional.child, TCodec, codec_priority, inner, arena, options, member_depth),
                 });
             }
         } else {
             try members.append(arena, .{
-                .key = comptime decode_mod.renamedKey(T, field.name),
-                .json = try renderTypedValue(field.type, fv, arena, options, member_depth),
+                .key = comptime decode_mod.renamedKey(T, TCodec, codec_priority, field.name),
+                .json = try renderTypedValue(field.type, TCodec, codec_priority, fv, arena, options, member_depth),
             });
         }
     }
@@ -319,9 +362,9 @@ fn collectTypedMembers(comptime T: type, value: T, arena: std.mem.Allocator, opt
 /// Encode a typed value to an arena-owned JSON byte slice at `depth`, so a
 /// sorted object can place it after its key. Recurses through `options`,
 /// so nested objects sort too.
-fn renderTypedValue(comptime FT: type, fv: FT, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError![]u8 {
+fn renderTypedValue(comptime FT: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, fv: FT, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError![]u8 {
     var buf: std.Io.Writer.Allocating = .init(arena);
-    try writeTypedValue(FT, fv, &buf.writer, arena, options, depth);
+    try writeTypedValue(FT, TCodec, codec_priority, fv, &buf.writer, arena, options, depth);
     return buf.written();
 }
 
@@ -463,6 +506,7 @@ fn writeFloat(w: *Io.Writer, f: f64) EncodeError!void {
 
 const parse = @import("parser.zig").parse;
 const parseInto = decode_mod.parseInto;
+const TypedCodec = codec_mod.TypedCodec;
 
 test "encode compact canonical" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -889,7 +933,7 @@ test "encodeTyped honors annotations symmetric with decode" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const cfg: C = .{ .listen_addr = "x", .port = 1 };
-    try encodeTyped(&aw.writer, cfg, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, cfg, a, .{});
     try std.testing.expectEqualStrings("{\"listen-addr\":\"x\",\"port\":1}", aw.written());
 }
 
@@ -901,8 +945,8 @@ test "typed round-trip" {
     const orig: C = .{ .name = "n", .tags = &.{ "a", "b" } };
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(&aw.writer, orig, a, .{});
-    const back = try parseInto(C, a, aw.written(), .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, orig, a, .{});
+    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
     try std.testing.expectEqualStrings("n", back.name);
     try std.testing.expectEqualStrings("b", back.tags[1]);
 }
@@ -920,7 +964,7 @@ test "encodeTyped: json_flatten inlines inner fields" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const outer: Outer = .{ .name = "foo", .inner = .{ .x = 1, .y = 2 } };
-    try encodeTyped(&aw.writer, outer, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, outer, a, .{});
     try testing.expectEqualStrings("{\"name\":\"foo\",\"x\":1,\"y\":2}", aw.written());
 }
 
@@ -936,13 +980,97 @@ test "encodeTyped: tagged union emits discriminator first" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const http: Plugin = .{ .http = .{ .port = 80 } };
-    try encodeTyped(&aw.writer, http, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, http, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"http\",\"port\":80,\"secure\":false}", aw.written());
 
     aw.clearRetainingCapacity();
     const none: Plugin = .none;
-    try encodeTyped(&aw.writer, none, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, none, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"none\"}", aw.written());
+}
+
+test "encodeTyped: tagged union struct payload" {
+    const C = union(enum) {
+        pub const json_tag = "kind";
+        pub const json_payload = "value";
+
+        version: struct { major: u8, minor: u8, patch: u8 },
+        createdAt: struct {},
+        none: void,
+    };
+
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .version = .{ .major = 1, .minor = 0, .patch = 1 } };
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try testing.expectEqualStrings("{\"kind\":\"version\",\"value\":{\"major\":1,\"minor\":0,\"patch\":1}}", aw.written());
+}
+
+test "encodeTyped: tagged union scalar payload" {
+    const C = union(enum) {
+        pub const json_tag = "kind";
+        pub const json_payload = "value";
+
+        version: struct { major: u8, minor: u8, patch: u8 },
+        createdAt: u32,
+        none: void,
+    };
+
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .createdAt = 2 };
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try testing.expectEqualStrings("{\"kind\":\"createdAt\",\"value\":2}", aw.written());
+}
+
+test "encodeTyped: tagged union void payload" {
+    const C = union(enum) {
+        pub const json_tag = "kind";
+        pub const json_payload = "value";
+
+        version: struct { major: u8, minor: u8, patch: u8 },
+        createdAt: u32,
+        none: void,
+    };
+
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+    const c: C = .{ .none = {} };
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try testing.expectEqualStrings("{\"kind\":\"none\"}", aw.written());
+}
+
+test "encodeTyped: tagged union with decode" {
+    const Component = union(enum) {
+        pub const json_tag = "$type";
+        pub const json_payload = "$data";
+
+        AttackComparison: struct { ComparisonOperator: bool, AttackValue: u8 },
+        InLaneAdjacentToLane: struct { Side: u8 },
+        Subset: struct { Subset: []const u8 },
+    };
+
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: Io.Writer.Allocating = .init(a);
+    defer aw.deinit();
+
+    const src = "{\"$type\":\"InLaneAdjacentToLane\",\"$data\":{\"Side\":3}}";
+    const c = try decode_mod.parseInto(Component, TypedCodec(.{}), .local_only, a, src, .{});
+    try testing.expectEqual(@as(u8, 3), c.InLaneAdjacentToLane.Side);
+
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try testing.expectEqualStrings(src, aw.written());
 }
 
 test "encodeTyped: enum emits tag name string" {
@@ -953,7 +1081,7 @@ test "encodeTyped: enum emits tag name string" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .mode = .slow };
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"mode\":\"slow\"}", aw.written());
 }
 
@@ -975,7 +1103,7 @@ test "encodeTyped: toJson hook overrides built-in encoding" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .v = .{ .major = 1, .minor = 2, .patch = 3 } };
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"v\":\"1.2.3\"}", aw.written());
 }
 
@@ -987,11 +1115,11 @@ test "encodeTyped: null optional omitted, non-null present" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .a = null, .b = 2 };
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"b\":2}", aw.written());
 
     // The omitted key decodes back to null: lossless round-trip.
-    const back = try parseInto(C, a, aw.written(), .{});
+    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
     try testing.expectEqual(@as(?u32, null), back.a);
     try testing.expectEqual(@as(?u32, 2), back.b);
 }
@@ -1005,7 +1133,7 @@ test "encodeTyped: embedded Value encodes dynamically" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .meta = meta, .n = 5 };
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"meta\":{\"a\":[1,2]},\"n\":5}", aw.written());
 }
 
@@ -1017,7 +1145,7 @@ test "encodeTyped: NaN float is unrepresentable" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .x = std.math.nan(f64) };
-    try testing.expectError(error.UnrepresentableFloat, encodeTyped(&aw.writer, c, a, .{}));
+    try testing.expectError(error.UnrepresentableFloat, encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{}));
 }
 
 test "encodeTyped: fixed array encodes as JSON array" {
@@ -1028,7 +1156,7 @@ test "encodeTyped: fixed array encodes as JSON array" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .rgb = .{ 1, 2, 3 } };
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"rgb\":[1,2,3]}", aw.written());
 }
 
@@ -1058,13 +1186,13 @@ test "encodeTyped: full annotation round-trip" {
     };
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(&aw.writer, orig, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, orig, a, .{});
     try testing.expectEqualStrings(
         "{\"listen-addr\":\"x\",\"verbose\":true,\"plugin\":{\"kind\":\"http\",\"port\":80}}",
         aw.written(),
     );
 
-    const back = try parseInto(C, a, aw.written(), .{});
+    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
     try testing.expectEqualStrings("x", back.listen_addr);
     try testing.expectEqual(@as(u32, 7), back.runtime);
     try testing.expectEqual(true, back.common.verbose);
@@ -1132,7 +1260,7 @@ test "sort_keys: empty object stays {}" {
     try encode(&aw.writer, .{ .object = .empty }, .{ .sort_keys = true });
     try testing.expectEqualStrings("{}", aw.written());
     aw.clearRetainingCapacity();
-    try encodeTyped(&aw.writer, .{}, a, .{ .sort_keys = true });
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, .{}, a, .{ .sort_keys = true });
     try testing.expectEqualStrings("{}", aw.written());
 }
 
@@ -1144,11 +1272,11 @@ test "sort_keys: typed struct fields in key order, default keeps declaration" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .zebra = 1, .apple = 2, .mango = 3 };
-    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     try testing.expectEqualStrings("{\"apple\":2,\"mango\":3,\"zebra\":1}", aw.written());
 
     aw.clearRetainingCapacity();
-    try encodeTyped(&aw.writer, c, a, .{});
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"zebra\":1,\"apple\":2,\"mango\":3}", aw.written());
 }
 
@@ -1165,7 +1293,7 @@ test "sort_keys: typed sorts by emitted (renamed) key, recursively" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .zed = 1, .bbb = .{ .yy = 2, .xx = 3 } };
-    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     // "aaa" (zed renamed) sorts before "bbb"; inner sorts xx before yy.
     try testing.expectEqualStrings("{\"aaa\":1,\"bbb\":{\"xx\":3,\"yy\":2}}", aw.written());
 }
@@ -1184,7 +1312,7 @@ test "sort_keys: flattened fields sort merged into the parent object" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .z = 1, .inner = .{ .m = 2, .a = 3 }, .b = 4 };
-    try encodeTyped(&aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     // Flattened a,m interleave with z,b under one sort: a,b,m,z.
     try testing.expectEqualStrings("{\"a\":3,\"b\":4,\"m\":2,\"z\":1}", aw.written());
 }
@@ -1201,7 +1329,7 @@ test "sort_keys: tagged union discriminator sorts among the payload" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const http: Plugin = .{ .http = .{ .port = 80, .addr = 1 } };
-    try encodeTyped(&aw.writer, http, a, .{ .sort_keys = true });
+    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, http, a, .{ .sort_keys = true });
     // keys addr, kind, port in order (kind is the discriminator).
     try testing.expectEqualStrings("{\"addr\":1,\"kind\":\"http\",\"port\":80}", aw.written());
 }

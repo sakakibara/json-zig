@@ -89,7 +89,7 @@ const Config = struct {
     },
 };
 
-const cfg = try json.parseInto(Config, arena, src, .{});
+const cfg = try json.parseInto(Config, json.DefaultTypes, arena, src, .{});
 ```
 
 Supported types: `bool`, all int/float widths (overflow-checked),
@@ -138,10 +138,10 @@ members decode as `HttpConfig`. For variant-name overrides, use
 `json_rename` on the union itself.
 
 For symmetric encoding of typed values (consulting the same annotations),
-use `json.encodeTyped(w, value, arena)`:
+use `json.encodeTyped(w, value, arena, options)`:
 
 ```zig
-try json.encodeTyped(w, cfg, arena);
+try json.encodeTyped(w, cfg, annotations, arena, options);
 ```
 
 Annotations and hooks are read from `@TypeOf(value)`, so pass a value of
@@ -457,7 +457,7 @@ through an edit cycle, and its comment-editing calls
 | `decode(T, arena, value, options)` | Decode an existing `Value` into `T`. |
 | `encode(w, value)` | Emit compact JSON to a `*std.Io.Writer`. |
 | `encodePretty(w, value, options)` | Emit indented JSON. |
-| `encodeTyped(w, value, arena)` | Encode a typed value, honoring annotations and hooks. |
+| `encodeTyped(w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
 | `Document.parse(arena, src, options)` | Lossless parse for the document model. |
 | `Document.empty(arena, options)` | Bootstrap a document with no source bytes. |
 | `Tokenizer.init(src, dialect)` / `.next()` | Lexer-level token stream for tooling. |
@@ -467,13 +467,27 @@ through an edit cycle, and its comment-editing calls
 | `asFloat(number_bytes)` | Coerce a streaming number event lexeme to `f64` (null on failure). |
 | `ValueStream.fromReader(gpa, reader, options)` | Record iterator over a JSON array or NDJSON stream. |
 
+#### Codec API
+API exposes `Codec(T..)` entry points, which mirror base API (unchanged for compatibility reasons)
+and allow users to provide hooks for external and comptime-generated types, which lack support
+for annotation via declarations. All functions internally share logic with base API and accept
+`codec_priority` for explicit control over annotation precedence.
+
+| Function | Purpose |
+| --- | --- |
+| `Codec.parseInto(T, codec_priority, arena, src, options)` | Decode straight into an instance of `T`. |
+| `Codec.parseIntoReader(T, codec_priority, arena, reader, options)` | Reader-input variant of `parseInto`. |
+| `Codec.decode(T, codec_priority, arena, value, options)` | Decode an existing `Value` into `T`. |
+| `Codec.encode(codec_priority, w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
+
 ### Types
 
 `Value`, `ObjectMap`, `Span`, `Spans`, `Diagnostic`, `ParseOptions`,
 `Dialect`, `NumberMode`, `PrettyOptions`, `Error`, `ReaderError`, `DecodeError`,
 `EncodeError`, `DocumentError`, `Document`, `Token`, `TokenKind`,
-`EventReader`, `Event`, `StreamOptions`, `StreamError`, `ValueStream`,
-`StreamShape`.
+`TypeAnnotationOptions`, `TypeAnnotationProvider`, `EventReader`, `Event`,
+`StreamOptions`, `StreamError`, `ValueStream`, `StreamShape`,
+`AnnotationRename`, `Annotations(T)`, `AnnotationsSource`, `TypedCodec(T..)`.
 
 Generated reference docs are published at
 **https://sakakibara.github.io/json-zig/**.
@@ -495,7 +509,7 @@ zig build fuzz           # random-input fuzzer (zig build fuzz -- [seed] [iterat
 zig build bench          # microbenchmarks (ReleaseFast)
 zig build docs           # generate reference docs
 zig build examples       # build all examples
-zig build example-basic  # run a specific example (basic, typed, edit, spans, stream)
+zig build example-basic  # run a specific example (basic, codec, typed, edit, spans, stream)
 ```
 
 ## Conformance
@@ -572,6 +586,7 @@ sessions, periodically emit and re-parse into a fresh arena.
 See `examples/` for runnable samples:
 
 - `basic.zig` - dynamic parse and dotted-path access
+- `codec.zig` - decode into Zig struct using external annotations (supports unions)
 - `typed.zig` - decode straight into a Zig struct
 - `edit.zig` - lossless document edit + emit
 - `spans.zig` - source spans and rich diagnostics
