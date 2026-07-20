@@ -17,6 +17,15 @@ const DecodeError = decode.DecodeError;
 const ParseOptions = parser.ParseOptions;
 const Value = v.Value;
 
+/// JSON name override.
+/// Reasoning: variable-length tuples are not present in Zig,
+/// therefore, this is the most viable solution for the
+/// use-case with comptime-generated types.
+pub const TypeAnnotationRename = struct {
+    from: []const u8,
+    to: []const u8,
+};
+
 /// Provides JSON tags and parsing hooks for typed decoding.
 /// Currently supports structs and tagged unions.
 pub fn TypeAnnotationProvider(comptime T: type) type {
@@ -25,7 +34,7 @@ pub fn TypeAnnotationProvider(comptime T: type) type {
         pub const associated_type: type = T;
 
         /// Name overrides.
-        json_rename: ?type = null,
+        json_rename: ?[]const TypeAnnotationRename = null,
         /// Sub-fields are decoded from the parent object
         json_flatten: ?[]const []const u8 = null,
         /// Excluded from decode/encode.
@@ -56,18 +65,18 @@ pub const DefaultTypes = TypeAnnotationOptions(.{});
 // }
 //
 // const _CardDescriptor: json.TypeAnnotationProvider(card_descriptor.CardDescriptor) = .{
-//     .json_rename = struct {
-//         pub const abilities = "special_abilities";
-//         pub const extra_tags = "tags";
+//     .json_rename = &.{
+//         .{ .from = "special_abilities", .to = "abilities" },
+//         .{ .from = "tags", .to = "extra_tags" },
 //     },
 //     .json_skip = &[_][]const u8{ ... },
-//     };
+// };
 // const _Component: json.TypeAnnotationProvider(Component) = .{ .json_tag = "$type" };
 // const _EffectEntityComponent: json.TypeAnnotationProvider(EffectEntityComponent) = .{ .json_tag = "$type" };
 // const _Query: json.TypeAnnotationProvider(Query) = .{
 //     .json_tag = "$type",
-//     .json_rename = struct {
-//         pub const AlwaysMatches = "AlwaysMatchesQuery";
+//     .json_rename = &.{
+//         .{ .from = "AlwaysMatchesQuery", .to = "AlwaysMatches" },
 //     },
 // };
 // pub const ComponentUnionRegistry = json.TypeAnnotationOptions(.{ _CardDescriptor, _Component, ..., _Query });
@@ -87,9 +96,9 @@ pub fn TypeAnnotationOptions(comptime options: anytype) type {
             const T = TOption.associated_type;
             const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
             if (annotation_entry.json_rename) |rename| {
-                for (@typeInfo(rename).@"struct".fields) |rf| {
-                    if (!@hasField(T, rf.name)) {
-                        @compileError("json_rename entry `" ++ rf.name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
+                for (rename) |rf| {
+                    if (!@hasField(T, rf.to)) {
+                        @compileError("json_rename entry `" ++ rf.to ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
                     }
                 }
             }

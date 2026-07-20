@@ -157,9 +157,37 @@ applies for hand-built `Value` trees.
 #### Non-declarative annotation options
 
 Alternatively, you can provide the aforementioned hooks in the
-`TypeAnnotationOptions` and pass it to the functions that consume it.
+`TypeAnnotationOptions(T)` and pass it to the functions that consume it.
 This is viable for whenever you are working with types from other
 packages or comptime-generated types.
+```zig
+fn ComponentUnion(comptime container: []const u8, comptime specs: anytype) type {
+    var field_names: [specs.len][]const u8 = undefined;
+    var field_types: [specs.len]type = undefined;
+    var field_attrs: [specs.len]FieldAttributes = undefined;
+    ...
+    const Tag = ComponentEnum(container, specs);
+    return @Union(.auto, Tag, &field_names, &field_types, &field_attrs);
+}
+
+const _Query: json.TypeAnnotationProvider(Query) = .{
+    .json_tag = "$type",
+    .json_rename = &.{ .{ .from = "AlwaysMatchesQuery", .to = "AlwaysMatches" } },
+};
+pub const Query = ComponentUnion("Queries", .{
+    .{
+        "AdjacentLaneQuery",
+        struct {
+            Side: Side,
+            OriginEntityType: OriginEntityType,
+        },
+    },
+    .{ "AlwaysMatches", struct {} },
+    .{ "AttackComparisonQuery", struct { ComparisonOperator: ComparisonOperator, AttackValue: u8 } },
+    ...
+});
+pub const ComponentUnionRegistry = json.TypeAnnotationOptions(.{ _Query, ... });
+```
 
 ### Editing (lossless document model)
 

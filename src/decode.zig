@@ -122,7 +122,9 @@ pub fn validateAnnotations(comptime T: type) void {
 pub fn renamedKey(comptime T: type, comptime TAnnotation: type, comptime field_name: []const u8) []const u8 {
     if (TAnnotation.getOrEmpty(T)) |a| {
         if (a.json_rename) |r| {
-            if (@hasDecl(r, field_name)) return @field(r, field_name);
+            comptime for (r) |rf| {
+                if (std.mem.eql(u8, rf.to, field_name)) return rf.from;
+            };
         }
     }
     if (@hasDecl(T, "json_rename")) {
@@ -527,7 +529,7 @@ fn decodeTaggedUnion(comptime T: type, comptime TAnnotation: type, arena: Alloca
     }
     const obj = value.object;
 
-    const tag_field = if (TAnnotation.getOrEmpty(T)) |a| block: {
+    const tag_field = comptime if (TAnnotation.getOrEmpty(T)) |a| block: {
         if (a.json_tag) |json_tag| {
             break :block json_tag;
         }
