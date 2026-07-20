@@ -25,7 +25,7 @@ const Config = struct {
     },
 };
 
-const cfg = try json.parseInto(Config, arena, src, .{});
+const cfg = try json.parseInto(Config, json.DefaultTypes, arena, src, .{});
 ```
 
 ## Install
@@ -89,7 +89,7 @@ const Config = struct {
     },
 };
 
-const cfg = try json.parseInto(Config, arena, src, .{});
+const cfg = try json.parseInto(Config, json.DefaultTypes, arena, src, .{});
 ```
 
 Supported types: `bool`, all int/float widths (overflow-checked),
@@ -138,10 +138,10 @@ members decode as `HttpConfig`. For variant-name overrides, use
 `json_rename` on the union itself.
 
 For symmetric encoding of typed values (consulting the same annotations),
-use `json.encodeTyped(w, value, arena)`:
+use `json.encodeTyped(w, value, annotations, arena)`:
 
 ```zig
-try json.encodeTyped(w, cfg, arena);
+try json.encodeTyped(w, cfg, annotations,  arena);
 ```
 
 Annotations and hooks are read from `@TypeOf(value)`, so pass a value of
@@ -153,6 +153,13 @@ The discriminator member is emitted first, with the payload's fields
 inline in the same object, so the output decodes back via
 `parseInto(T, ...)`. The plain `json.encode(w, value: Value)` still
 applies for hand-built `Value` trees.
+
+#### Non-declarative annotation options
+
+Alternatively, you can provide the aforementioned hooks in the
+`TypeAnnotationOptions` and pass it to the functions that consume it.
+This is viable for whenever you are working with types from other
+packages or comptime-generated types.
 
 ### Editing (lossless document model)
 
@@ -436,12 +443,12 @@ through an edit cycle, and its comment-editing calls
 | --- | --- |
 | `parse(arena, src, options)` | Dynamic parse to a `Value` tree. |
 | `parseReader(arena, reader, options)` | Reader-input variant. |
-| `parseInto(T, arena, src, options)` | Decode straight into an instance of `T`. |
-| `parseIntoReader(T, arena, reader, options)` | Reader-input variant of `parseInto`. |
-| `decode(T, arena, value, options)` | Decode an existing `Value` into `T`. |
+| `parseInto(T, TAnnotation, arena, src, options)` | Decode straight into an instance of `T`. |
+| `parseIntoReader(T, TAnnotation, arena, reader, options)` | Reader-input variant of `parseInto`. |
+| `decode(T, TAnnotation, arena, value, options)` | Decode an existing `Value` into `T`. |
 | `encode(w, value)` | Emit compact JSON to a `*std.Io.Writer`. |
 | `encodePretty(w, value, options)` | Emit indented JSON. |
-| `encodeTyped(w, value, arena)` | Encode a typed value, honoring annotations and hooks. |
+| `encodeTyped(w, value, TAnnotation, arena)` | Encode a typed value, honoring annotations and hooks. |
 | `Document.parse(arena, src, options)` | Lossless parse for the document model. |
 | `Tokenizer.init(src, dialect)` / `.next()` | Lexer-level token stream for tooling. |
 | `EventReader.fromReader(gpa, reader, options)` | Incremental SAX reader backed by a `std.Io.Reader`. |
@@ -455,8 +462,8 @@ through an edit cycle, and its comment-editing calls
 `Value`, `ObjectMap`, `Span`, `Spans`, `Diagnostic`, `ParseOptions`,
 `Dialect`, `NumberMode`, `PrettyOptions`, `Error`, `ReaderError`, `DecodeError`,
 `EncodeError`, `DocumentError`, `Document`, `Token`, `TokenKind`,
-`EventReader`, `Event`, `StreamOptions`, `StreamError`, `ValueStream`,
-`StreamShape`.
+`TypeAnnotationOptions`, `TypeAnnotationProvider`, `EventReader`, `Event`,
+`StreamOptions`, `StreamError`, `ValueStream`, `StreamShape`.
 
 Generated reference docs are published at
 **https://sakakibara.github.io/json-zig/**.
