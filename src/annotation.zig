@@ -35,16 +35,20 @@ pub fn TypeAnnotationProvider(comptime T: type) type {
 
         /// Name overrides.
         json_rename: ?[]const TypeAnnotationRename = null,
-        /// Sub-fields are decoded from the parent object
+        /// Sub-fields are decoded from the parent object.
         json_flatten: ?[]const []const u8 = null,
         /// Excluded from decode/encode.
         json_skip: ?[]const []const u8 = null,
-        /// Custom deserialization of T,
+
+        /// Custom deserialization of `T` struct.
         fromJson: ?*const fn (arena: Allocator, value: Value, options: ParseOptions) DecodeError!T = null,
-        /// Custom serialization of T,
+        /// Custom serialization of `T` struct.
         toJson: ?*const fn (self: T, arena: Allocator) Allocator.Error!Value = null,
-        /// Discriminator member for tagged unions,
+
+        /// Discriminator member for tagged unions.
         json_tag: ?[]const u8 = null,
+        // Payload / value member for tagged unions.
+        json_payload: ?[]const u8 = null,
     };
 }
 
@@ -92,6 +96,7 @@ pub fn TypeAnnotationOptions(comptime options: anytype) type {
             if (!@hasField(TOption, "fromJson")) break;
             if (!@hasField(TOption, "toJson")) break;
             if (!@hasField(TOption, "json_tag")) break;
+            if (!@hasField(TOption, "json_payload")) break;
 
             const T = TOption.associated_type;
             const kind = if (@typeInfo(T) == .@"union") "variant" else "field";

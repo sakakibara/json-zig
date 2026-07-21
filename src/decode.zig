@@ -134,6 +134,20 @@ pub fn renamedKey(comptime T: type, comptime TAnnotation: type, comptime field_n
     return field_name;
 }
 
+/// Returns the payload field name for tagged unions, consulting
+/// `T.json_payload` or `TAnnotation.json_payload` if present.
+pub fn payloadField(comptime T: type, comptime TAnnotation: type) ?[]const u8 {
+    if (TAnnotation.getOrEmpty(T)) |a| {
+        if (a.json_payload) |p| {
+            return p;
+        }
+    }
+    if (@hasDecl(T, "json_payload")) {
+        return T.json_payload;
+    }
+    return null;
+}
+
 /// Returns true if `field_name` on type `T` is listed in `T.json_skip`
 /// or `TAnnotation.json_skip`.
 pub fn isSkipped(comptime T: type, comptime TAnnotation: type, comptime field_name: []const u8) bool {
@@ -563,7 +577,25 @@ fn decodeTaggedUnion(comptime T: type, comptime TAnnotation: type, arena: Alloca
 
             // Build a filtered object view that drops the discriminator field.
             var filtered: value_mod.ObjectMap = .empty;
-            var it = obj.iterator();
+            var it = if (payloadField(T, TAnnotation)) |json_payload| blk: {
+                if (obj.get(json_payload)) |p| {
+                    if (p != .object) {
+                        if (options.errors) |list| {
+                            const msg = try std.fmt.allocPrint(arena, "expected object for {s}, got {s}", .{ @typeName(T), @tagName(value) });
+                            try appendDiag(list, arena, path, msg, null);
+                        }
+                        return error.TypeMismatch;
+                    }
+                    break :blk p.object.iterator();
+                } else {
+                    if (options.errors) |list| {
+                        const msg = try std.fmt.allocPrint(arena, "missing payload field `{s}` for {s}", .{ json_payload, @typeName(T) });
+                        try appendDiag(list, arena, path, msg, null);
+                    }
+                    return error.MissingField;
+                }
+            } else obj.iterator();
+
             while (it.next()) |entry| {
                 if (std.mem.eql(u8, entry.key_ptr.*, tag_field)) continue;
                 const key_dup = try arena.dupe(u8, entry.key_ptr.*);

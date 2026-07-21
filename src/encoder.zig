@@ -242,7 +242,7 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TAnnotation: type, value: T,
     var first = true;
     inline for (@typeInfo(T).@"union".fields) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
-            const tag_field = if (TAnnotation.getOrEmpty(T)) |a| block: {
+            const tag_field = comptime if (TAnnotation.getOrEmpty(T)) |a| block: {
                 if (a.json_tag) |json_tag| {
                     break :block json_tag;
                 }
@@ -250,7 +250,13 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TAnnotation: type, value: T,
             } else T.json_tag;
             try writeTypedMember(w, tag_field, options, depth + 1, &first);
             try writeQuotedString(w, comptime decode_mod.renamedKey(T, TAnnotation, union_field.name));
-            if (union_field.type != void) {
+
+            if (decode_mod.payloadField(T, TAnnotation)) |payload| {
+                try writeTypedMember(w, payload, options, depth + 1, &first);
+                if (union_field.type != void) {
+                    try writeTypedObject(union_field.type, TAnnotation, @field(value, union_field.name), w, arena, options, depth + 1);
+                }
+            } else if (union_field.type != void) {
                 try writeTypedStructFields(union_field.type, TAnnotation, @field(value, union_field.name), w, arena, options, depth, &first);
             }
         }
@@ -282,7 +288,7 @@ fn writeTypedTaggedUnionSorted(comptime T: type, comptime TAnnotation: type, val
     inline for (@typeInfo(T).@"union".fields) |union_field| {
         if (active == @field(std.meta.Tag(T), union_field.name)) {
             try members.append(arena, .{
-                .key = if (TAnnotation.getOrEmpty(T)) |a| block: {
+                .key = comptime if (TAnnotation.getOrEmpty(T)) |a| block: {
                     if (a.json_tag) |json_tag| {
                         break :block json_tag;
                     }
@@ -290,7 +296,13 @@ fn writeTypedTaggedUnionSorted(comptime T: type, comptime TAnnotation: type, val
                 } else T.json_tag,
                 .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, TAnnotation, union_field.name)),
             });
-            if (union_field.type != void) {
+
+            if (decode_mod.payloadField(T, TAnnotation)) |payload| {
+                try members.append(arena, .{
+                    .key = payload,
+                    .json = try renderTypedValue(union_field.type, TAnnotation, @field(value, union_field.name), arena, options, depth + 1),
+                });
+            } else if (union_field.type != void) {
                 try collectTypedMembers(union_field.type, TAnnotation, @field(value, union_field.name), arena, options, depth + 1, &members);
             }
         }
