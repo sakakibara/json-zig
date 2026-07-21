@@ -40,14 +40,33 @@
 //! - `set` on a missing leaf appends a new member to its enclosing
 //!   object, matching the surrounding style: single-line objects get a
 //!   `, "k": v` separator, multi-line objects get `,` + newline + the
-//!   indentation inferred from the last sibling member. Only the leaf
-//!   may be new; a missing intermediate container returns
-//!   `error.PathNotFound`, and array elements can only be replaced,
-//!   never created (an index leaf on a missing path is
-//!   `error.PathNotFound` too).
+//!   indentation inferred from the last sibling member.
+//! - `set` on a path whose intermediate object(s) are also missing
+//!   creates them too, as a single nested-object splice appended at the
+//!   first missing key (each level rendered compactly, `{"b": {"c":
+//!   v}}`), since a freshly created container has no sibling to infer a
+//!   multi-line style from). Only objects are ever created this way:
+//!   array elements can still only be replaced, never created, so a
+//!   `[N]` anywhere in the missing tail (including as the leaf itself)
+//!   stays `error.PathNotFound`, unchanged from before.
 //! - `remove` deletes the member or element together with its
 //!   separator comma and the trivia between it and its neighbor;
 //!   removing the only member collapses the container to `{}` / `[]`.
+//! - `Document.empty` bootstraps a document with no source bytes at
+//!   all (a not-yet-created file): reads see nothing, and the first
+//!   `set` splices the root object and the whole requested path in one
+//!   shot. `Document.parse` still requires well-formed JSON -- an empty
+//!   or all-whitespace input is `error.JsonParseError` there, same as
+//!   `json.parse`; `empty` is the dedicated entry point for the "file
+//!   may not exist yet" case.
+//! - `setValueSegments` / `setSegments` / `removeSegments` take a path
+//!   as pre-split segments (`&.{ "host", "example.com" }`) instead of a
+//!   dotted string, so a key containing a literal `.` is addressed
+//!   unambiguously (each segment is a literal key, never re-split on
+//!   `.` or `[...]`). `set` / `setValue` / `remove` still take dotted
+//!   string paths and split them into segments the same way
+//!   (`PathIterator`) before doing the same work, so a dot-free path
+//!   behaves identically either way.
 //! - Comment editing (`addCommentBefore`, `setTrailingComment`) is
 //!   valid only for `.jsonc` documents; on strict-JSON documents both
 //!   return `error.CommentsNotSupported`.
@@ -65,6 +84,7 @@ const value_mod = @import("value.zig");
 const Dialect = tokenizer_mod.Dialect;
 const Token = tokenizer_mod.Token;
 const Value = value_mod.Value;
+const Segment = value_mod.PathIterator.Segment;
 
 pub const Error = error{
     PathNotFound,
@@ -156,6 +176,31 @@ pub const Document = struct {
         };
     }
 
+    /// Bootstrap a document with no source bytes -- the "file doesn't
+    /// exist yet" case. Reads (`get`/`has`/`getT`) see nothing; emitting
+    /// unmodified reproduces the empty input, same as `parse` does for
+    /// any untouched document. The first `set` (or `setValueSegments`
+    /// etc.) splices the root object and the whole requested path in as
+    /// a single edit. Unlike `parse`, this never fails: `errors` and
+    /// `spans` in `options` are meaningless here (nothing was parsed)
+    /// and are ignored; only `dialect` and `max_depth` apply.
+    pub fn empty(arena: Allocator, options: parser_mod.ParseOptions) Error!Document {
+        const root = try arena.create(Node);
+        root.* = .{
+            .outer = .{ .start = 0, .end = 0 },
+            .content = .{ .start = 0, .end = 0 },
+            .data = .{ .object = .empty },
+        };
+        return .{
+            .arena = arena,
+            .source = "",
+            .dialect = options.dialect,
+            .max_depth = options.max_depth,
+            .root = root,
+            .parsed = .{ .object = .empty },
+        };
+    }
+
     /// Look up a value by dotted path (syntax as `Value.get`). Returns
     /// null if absent.
     pub fn get(self: *const Document, path: []const u8) ?Value {
@@ -206,11 +251,35 @@ pub const Document = struct {
         return self.setRaw(path, try self.arena.dupe(u8, raw));
     }
 
+    /// Segment-taking twin of `set`. `segments` are literal object
+    /// keys addressed in order -- never re-split on `.` or `[N]` -- so
+    /// a key containing either byte (e.g. `"example.com"`) is
+    /// addressed unambiguously. See `set` for the type-dispatch rules.
+    pub fn setSegments(self: *Document, segments: []const []const u8, value: anytype) Error!void {
+        const v = try valueFromAny(self.arena, @TypeOf(value), value);
+        return self.setValueSegments(segments, v);
+    }
+
+    /// Segment-taking twin of `setValue`.
+    pub fn setValueSegments(self: *Document, segments: []const []const u8, value: Value) Error!void {
+        const raw = try renderValue(self.arena, value);
+        return self.setRawSegments(try segmentsFromKeys(self.arena, segments), raw);
+    }
+
     /// Remove a member or element. Returns `error.PathNotFound` if
     /// absent; the root value itself cannot be removed
     /// (`error.InvalidValue`).
     pub fn remove(self: *Document, path: []const u8) Error!void {
-        const r = self.resolve(path) orelse return error.PathNotFound;
+        return self.removeSeg(try segmentsFromPath(self.arena, path));
+    }
+
+    /// Segment-taking twin of `remove`.
+    pub fn removeSegments(self: *Document, segments: []const []const u8) Error!void {
+        return self.removeSeg(try segmentsFromKeys(self.arena, segments));
+    }
+
+    fn removeSeg(self: *Document, segments: []const Segment) Error!void {
+        const r = self.resolveSegments(segments) orelse return error.PathNotFound;
         const parent = r.parent orelse return error.InvalidValue;
         switch (parent.data) {
             .object => |members| {
@@ -243,7 +312,7 @@ pub const Document = struct {
         // Validate before touching the document so the source stays byte-identical on error.
         if (std.mem.indexOfAny(u8, text, "\n\r") != null) return error.InvalidComment;
         if (std.mem.indexOf(u8, text, "*/") != null) return error.InvalidComment;
-        const r = self.resolve(path) orelse return error.PathNotFound;
+        const r = (try self.resolve(path)) orelse return error.PathNotFound;
         const anchor: usize = blk: {
             if (r.parent) |p| {
                 if (p.data == .object) break :blk p.data.object.items[r.index].key.outer.start;
@@ -273,7 +342,7 @@ pub const Document = struct {
     /// only.
     pub fn setTrailingComment(self: *Document, path: []const u8, text: ?[]const u8) Error!void {
         if (self.dialect != .jsonc) return error.CommentsNotSupported;
-        const r = self.resolve(path) orelse return error.PathNotFound;
+        const r = (try self.resolve(path)) orelse return error.PathNotFound;
         const src = self.source;
 
         // The trailing region is "[ws] [,] [ws] [comment]" on the value's
@@ -346,26 +415,92 @@ pub const Document = struct {
     }
 
     fn setRaw(self: *Document, path: []const u8, raw: []const u8) Error!void {
-        if (self.resolve(path)) |r| {
-            return self.applyEdit(r.node.outer.start, r.node.outer.end, raw);
-        }
-        return self.insertNewMember(path, raw);
+        return self.setRawSegments(try segmentsFromPath(self.arena, path), raw);
     }
 
-    fn insertNewMember(self: *Document, path: []const u8, raw: []const u8) Error!void {
-        const split = splitLeaf(path) orelse return error.PathNotFound;
-        const pr = self.resolve(split.parent) orelse return error.PathNotFound;
-        if (pr.node.data != .object) return error.InvalidValue;
-        return self.appendMember(pr.node, split.leaf, raw);
+    /// Segment-based core shared by `setRaw` (string paths, pre-split
+    /// via `segmentsFromPath`) and `setValueSegments` (already literal
+    /// key segments). An existing full path is edited in place; a
+    /// missing one is created by `insertMissing`.
+    fn setRawSegments(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
+        if (self.resolveSegments(segments)) |r| {
+            return self.applyEdit(r.node.outer.start, r.node.outer.end, raw);
+        }
+        return self.insertMissing(segments, raw);
+    }
+
+    /// Splice a brand-new leaf, creating any missing intermediate
+    /// object(s) along the way. `segments` is never empty here:
+    /// `resolveSegments(&.{})` always finds the root, so `setRawSegments`
+    /// never falls through to this function with an empty list.
+    ///
+    /// Only objects are ever created. If the leaf segment is an array
+    /// index (or a malformed bracket), or if any segment in the missing
+    /// tail is, creation is refused and the path stays
+    /// `error.PathNotFound` -- array elements can only be replaced,
+    /// never created, whether or not their container exists yet.
+    fn insertMissing(self: *Document, segments: []const Segment, raw: []const u8) Error!void {
+        if (segments[segments.len - 1] != .key) return error.PathNotFound;
+
+        // Walk the existing prefix as far as it goes. Reaching the end
+        // of the loop normally (not via `break`) means every segment up
+        // to the leaf's immediate parent already exists -- only the
+        // leaf itself is new, today's single-level append. A `break`
+        // means `cur` (a real, existing object) is missing `missing_key`
+        // and everything from there through the leaf must be created.
+        var cur = self.root;
+        var i: usize = 0;
+        var missing_key: []const u8 = undefined;
+        while (i < segments.len - 1) : (i += 1) {
+            switch (segments[i]) {
+                .key => |k| {
+                    if (cur.data != .object) return error.InvalidValue;
+                    if (findMemberIndex(cur, k)) |mi| {
+                        cur = cur.data.object.items[mi].value;
+                    } else {
+                        missing_key = k;
+                        break;
+                    }
+                },
+                .index => |idx| {
+                    if (cur.data != .array or idx >= cur.data.array.items.len) return error.PathNotFound;
+                    cur = cur.data.array.items[idx];
+                },
+                .raw => return error.PathNotFound,
+            }
+        } else {
+            if (cur.data != .object) return error.InvalidValue;
+            return self.appendMember(cur, segments[segments.len - 1].key, raw);
+        }
+
+        // `cur` is missing `missing_key`; wrap `raw` in one compact
+        // object per remaining segment (innermost/leaf first) and
+        // append the whole nested structure as a single new member.
+        var text = raw;
+        var j = segments.len;
+        while (j > i + 1) : (j -= 1) {
+            text = switch (segments[j - 1]) {
+                .key => |k| try wrapObject(self.arena, k, text),
+                .index, .raw => return error.PathNotFound,
+            };
+        }
+        return self.appendMember(cur, missing_key, text);
     }
 
     fn appendMember(self: *Document, parent: *Node, key: []const u8, raw: []const u8) Error!void {
         const members = parent.data.object.items;
         const key_json = try renderValue(self.arena, .{ .string = key });
         if (members.len == 0) {
+            const text = try std.mem.concat(self.arena, u8, &.{ key_json, ": ", raw });
+            if (parent.outer.start == parent.outer.end) {
+                // Virtual root of a `Document.empty` document: no `{`/`}`
+                // exist in source yet, so splice the whole envelope in
+                // rather than replacing an interior that isn't there.
+                const wrapped = try std.mem.concat(self.arena, u8, &.{ "{", text, "}" });
+                return self.applyEdit(parent.outer.start, parent.outer.end, wrapped);
+            }
             // Replace the whole interior so `{}`, `{ }`, and `{\n}` all
             // collapse to `{"k": v}`.
-            const text = try std.mem.concat(self.arena, u8, &.{ key_json, ": ", raw });
             return self.applyEdit(parent.outer.start + 1, parent.outer.end - 1, text);
         }
         const last = members[members.len - 1];
@@ -438,30 +573,25 @@ pub const Document = struct {
         index: usize,
     };
 
-    /// Walk `path` through the node tree (same syntax as `Value.get`:
-    /// dotted keys, `[N]` indices, via `PathIterator`). Returns null on
-    /// any missing segment or traversal through a scalar.
-    fn resolve(self: *const Document, path: []const u8) ?Resolved {
+    /// Resolve a dotted string `path` (`PathIterator` syntax: dotted
+    /// keys, `[N]` indices). A thin wrapper over `resolveSegments` for
+    /// the two comment-editing methods, which only ever look up an
+    /// existing path (never create).
+    fn resolve(self: *const Document, path: []const u8) Error!?Resolved {
+        return self.resolveSegments(try segmentsFromPath(self.arena, path));
+    }
+
+    /// Walk `segments` through the node tree. Returns null on any
+    /// missing segment or traversal through a non-container.
+    fn resolveSegments(self: *const Document, segments: []const Segment) ?Resolved {
         var cur = self.root;
         var parent: ?*Node = null;
         var index: usize = 0;
-        var it = value_mod.PathIterator.init(path);
-        while (it.next()) |segment| {
+        for (segments) |segment| {
             switch (segment) {
                 .key => |k| {
                     if (cur.data != .object) return null;
-                    // Duplicate keys are last-wins (matching the parsed
-                    // Value's ObjectMap): scan for the LAST member whose
-                    // decoded key matches so reads and writes agree.
-                    const found: ?usize = blk: {
-                        var mi = cur.data.object.items.len;
-                        while (mi > 0) {
-                            mi -= 1;
-                            if (std.mem.eql(u8, cur.data.object.items[mi].key.decoded, k)) break :blk mi;
-                        }
-                        break :blk null;
-                    };
-                    const mi = found orelse return null;
+                    const mi = findMemberIndex(cur, k) orelse return null;
                     parent = cur;
                     index = mi;
                     cur = cur.data.object.items[mi].value;
@@ -480,30 +610,47 @@ pub const Document = struct {
     }
 };
 
-const Split = struct { parent: []const u8, leaf: []const u8 };
-
-/// Split a path into its enclosing-container path and final key
-/// segment: "a.b[2].c" -> ("a.b[2]", "c"). Returns null when the leaf
-/// is an array index (elements cannot be created, only replaced) or
-/// empty. Iterating to exhaustion leaves `tail_start` at the byte
-/// where the final segment's raw text begins; the parent is everything
-/// before it minus a separator dot.
-fn splitLeaf(path: []const u8) ?Split {
-    if (path.len == 0 or path[path.len - 1] == ']' or path[path.len - 1] == '.') return null;
-    var it = value_mod.PathIterator.init(path);
-    while (it.next()) |_| {}
-    const tail = path[it.tail_start..];
-    // A `]` inside the tail still bounds the leaf even though lookups
-    // treat it as key content, so a leaf key never contains `]`.
-    if (std.mem.lastIndexOfScalar(u8, tail, ']')) |stray| {
-        const cut = it.tail_start + stray + 1;
-        return .{ .parent = path[0..cut], .leaf = path[cut..] };
+/// Duplicate keys are last-wins (matching the parsed `Value`'s
+/// ObjectMap): scan for the LAST member of `node` (must be `.object`)
+/// whose decoded key equals `key`, so reads and writes agree on which
+/// member a duplicated key designates.
+fn findMemberIndex(node: *const Node, key: []const u8) ?usize {
+    if (node.data != .object) return null;
+    var mi = node.data.object.items.len;
+    while (mi > 0) {
+        mi -= 1;
+        if (std.mem.eql(u8, node.data.object.items[mi].key.decoded, key)) return mi;
     }
-    const parent_end = if (it.tail_start > 0 and path[it.tail_start - 1] == '.')
-        it.tail_start - 1
-    else
-        it.tail_start;
-    return .{ .parent = path[0..parent_end], .leaf = path[it.tail_start..] };
+    return null;
+}
+
+/// Split a dotted string path into segments via `PathIterator`,
+/// arena-allocated so the creation-aware core can walk it more than
+/// once (the streaming iterator is single-pass).
+fn segmentsFromPath(arena: Allocator, path: []const u8) Error![]const Segment {
+    var list: std.ArrayList(Segment) = .empty;
+    var it = value_mod.PathIterator.init(path);
+    while (it.next()) |segment| try list.append(arena, segment);
+    return list.toOwnedSlice(arena);
+}
+
+/// Wrap pre-split key segments as `Segment.key` values. The segments
+/// API never interprets `.` or `[...]`, so a key containing either
+/// byte still addresses exactly that one member.
+fn segmentsFromKeys(arena: Allocator, keys: []const []const u8) Error![]const Segment {
+    const out = try arena.alloc(Segment, keys.len);
+    for (keys, out) |k, *seg| seg.* = .{ .key = k };
+    return out;
+}
+
+/// Render `{"key": inner}` compactly -- the value spliced in for each
+/// missing intermediate level `insertMissing` creates. Uses the same
+/// `"k": v` style `appendMember` already uses for a leaf on an empty
+/// object, since a freshly created container has no sibling to infer a
+/// different style from.
+fn wrapObject(arena: Allocator, key: []const u8, inner: []const u8) Error![]const u8 {
+    const key_json = try renderValue(arena, .{ .string = key });
+    return std.mem.concat(arena, u8, &.{ "{", key_json, ": ", inner, "}" });
 }
 
 /// Tokenize `source` (skipping comments) and build the node tree. The
@@ -549,7 +696,7 @@ fn buildNode(arena: Allocator, source: []const u8, toks: []const Token, i: *usiz
                 if (i.* >= toks.len or toks[i.*].kind != .colon) return error.JsonParseError;
                 i.* += 1;
                 const value = try buildNode(arena, source, toks, i, depth + 1, max_depth);
-                const key_content = source[@intCast(key_tok.span.start + 1) .. @intCast(key_tok.span.end - 1)];
+                const key_content = source[@intCast(key_tok.span.start + 1)..@intCast(key_tok.span.end - 1)];
                 try members.append(arena, .{
                     .key = .{
                         .decoded = try parser_mod.decodeStringContent(arena, key_content),
@@ -873,13 +1020,134 @@ test "append into empty object" {
     try testing.expectEqualStrings("{\"k\": \"v\"}", try emitToString(a, &doc));
 }
 
-test "set with missing intermediate path errors" {
+test "set through a scalar is a type error, not a missing path" {
     var ar = std.heap.ArenaAllocator.init(testing.allocator);
     defer ar.deinit();
     var doc = try Document.parse(ar.allocator(), "{\"a\": 1}", .{});
-    try testing.expectError(error.PathNotFound, doc.set("missing.leaf", true));
-    // Path through a scalar is a type error, not a missing path.
     try testing.expectError(error.InvalidValue, doc.set("a.leaf", true));
+}
+
+test "set creates a missing intermediate object, then the leaf" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{\"a\": 1}", .{});
+    try doc.set("missing.leaf", true);
+    try testing.expectEqualStrings("{\"a\": 1, \"missing\": {\"leaf\": true}}", try emitToString(a, &doc));
+    try testing.expectEqual(true, doc.getT(bool, "missing.leaf").?);
+}
+
+test "set creates a 3-deep missing path, preserving surrounding trivia" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const src = "{\n  // keep me\n  \"x\": 1\n}";
+    var doc = try Document.parse(a, src, .{ .dialect = .jsonc });
+    try doc.set("a.b.c", @as(i64, 9));
+    try testing.expectEqualStrings(
+        "{\n  // keep me\n  \"x\": 1,\n  \"a\": {\"b\": {\"c\": 9}}\n}",
+        try emitToString(a, &doc),
+    );
+    try testing.expectEqual(@as(i64, 9), doc.getT(i64, "a.b.c").?);
+}
+
+test "set creates missing intermediates through a partially existing prefix" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{\"a\": {\"x\": 1}}", .{});
+    try doc.set("a.b.c", @as(i64, 2));
+    try testing.expectEqualStrings("{\"a\": {\"x\": 1, \"b\": {\"c\": 2}}}", try emitToString(a, &doc));
+    try testing.expectEqual(@as(i64, 2), doc.getT(i64, "a.b.c").?);
+    try testing.expectEqual(@as(i64, 1), doc.getT(i64, "a.x").?);
+}
+
+test "intermediate creation never creates arrays: a missing array-typed prefix stays PathNotFound" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    var doc = try Document.parse(ar.allocator(), "{\"a\": 1}", .{});
+    // "missing" doesn't exist; the path would need it to become an array
+    // to hold index 0 -- creation only ever builds objects, so this stays
+    // an error, exactly like the pre-existing "leaf is an index" rule.
+    try testing.expectError(error.PathNotFound, doc.set("missing[0].c", true));
+    try testing.expectError(error.PathNotFound, doc.set("missing[0]", true));
+}
+
+test "Document.empty bootstraps root + full path on first set" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.empty(a, .{});
+    try testing.expectEqualStrings("", try emitToString(a, &doc));
+    try testing.expect(!doc.has("a.b.c"));
+
+    try doc.set("a.b.c", @as(i64, 1));
+    try testing.expectEqualStrings("{\"a\": {\"b\": {\"c\": 1}}}", try emitToString(a, &doc));
+    try testing.expectEqual(@as(i64, 1), doc.getT(i64, "a.b.c").?);
+}
+
+test "set on an empty root object {} creates the full path" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{}", .{});
+    try doc.set("a.b.c", @as(i64, 1));
+    try testing.expectEqualStrings("{\"a\": {\"b\": {\"c\": 1}}}", try emitToString(a, &doc));
+}
+
+test "setValueSegments creates the single literal key, not a nested dotted path" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{}", .{});
+    try doc.setValueSegments(&.{ "host", "example.com" }, .{ .string = "1.2.3.4" });
+    try testing.expectEqualStrings("{\"host\": {\"example.com\": \"1.2.3.4\"}}", try emitToString(a, &doc));
+
+    // Re-parse independently and confirm the key is the single literal
+    // "example.com", not a nested "example" -> "com" path.
+    var check = try Document.parse(a, try emitToString(a, &doc), .{});
+    try testing.expectEqual(@as(usize, 1), check.root.data.object.items.len);
+    const outer = check.root.data.object.items[0].value;
+    try testing.expectEqual(@as(usize, 1), outer.data.object.items.len);
+    try testing.expectEqualStrings("example.com", outer.data.object.items[0].key.decoded);
+    try testing.expect(!check.has("host.example")); // NOT nested example->com
+}
+
+test "setSegments dispatches native types like set" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{}", .{});
+    try doc.setSegments(&.{ "server", "host" }, "example.com");
+    try testing.expectEqualStrings("{\"server\": {\"host\": \"example.com\"}}", try emitToString(a, &doc));
+    try testing.expectEqualStrings("example.com", doc.getT([]const u8, "server.host").?);
+}
+
+test "removeSegments removes a member addressed by literal key segments" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var doc = try Document.parse(a, "{\"host\": {\"example.com\": 1, \"other\": 2}}", .{});
+    try doc.removeSegments(&.{ "host", "example.com" });
+    try testing.expectEqualStrings("{\"host\": {\"other\": 2}}", try emitToString(a, &doc));
+    try testing.expectError(error.PathNotFound, doc.removeSegments(&.{ "host", "example.com" }));
+}
+
+test "existing-key set via segments is byte-identical to the string-path route" {
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const src = "{\n  \"a\": 1,\n  \"b\": 2\n}";
+
+    var via_path = try Document.parse(a, src, .{});
+    try via_path.set("a", @as(i64, 99));
+
+    var via_seg = try Document.parse(a, src, .{});
+    try via_seg.setSegments(&.{"a"}, @as(i64, 99));
+
+    const wanted = "{\n  \"a\": 99,\n  \"b\": 2\n}";
+    try testing.expectEqualStrings(wanted, try emitToString(a, &via_path));
+    try testing.expectEqualStrings(wanted, try emitToString(a, &via_seg));
 }
 
 test "comment ops error on strict-json documents" {
@@ -1132,7 +1400,7 @@ test "invariant: resolve content matches Value.get; outer splice is a no-op" {
     var doc = try Document.parse(a, src, .{});
     const paths = [_][]const u8{ "a", "b", "n.x" };
     for (paths) |p| {
-        const r = doc.resolve(p).?;
+        const r = (try doc.resolve(p)).?;
         const want = doc.get(p).?;
         // The resolved node's outer bytes re-parse to the same logical
         // value the parsed view reports for this path: resolve() and the

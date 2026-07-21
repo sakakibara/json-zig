@@ -189,12 +189,28 @@ separators, comments, and surrounding formatting stay put. `set` on a
 missing leaf appends a new member to its enclosing object, matching the
 surrounding style (single-line objects get `, "k": v`; multi-line objects
 get a comma, newline, and the indentation inferred from the last sibling).
+Missing intermediate objects along the path are created too (`set("a.b.c",
+v)` creates `a` and `a.b` as needed); array elements are still only ever
+replaced, never created.
 
 ```jsonc
 // Before:
 { "x": 1, "y": 2 }
 // doc.setLiteral("x", "99") produces:
 { "x": 99, "y": 2 }
+```
+
+`Document.empty(arena, options)` bootstraps a document with no source
+bytes at all -- the first `set` splices the root object and the whole
+path in as one edit, for the "file doesn't exist yet" case. And
+`setValueSegments` / `setSegments` / `removeSegments` take a path as
+pre-split key segments instead of a dotted string, so a key containing a
+literal `.` is addressed unambiguously:
+
+```zig
+var doc = try json.Document.empty(arena, .{});
+try doc.setSegments(&.{ "host", "example.com" }, "1.2.3.4");
+// {"host": {"example.com": "1.2.3.4"}} -- one literal key, not nested.
 ```
 
 ### Source spans
@@ -443,6 +459,7 @@ through an edit cycle, and its comment-editing calls
 | `encodePretty(w, value, options)` | Emit indented JSON. |
 | `encodeTyped(w, value, arena)` | Encode a typed value, honoring annotations and hooks. |
 | `Document.parse(arena, src, options)` | Lossless parse for the document model. |
+| `Document.empty(arena, options)` | Bootstrap a document with no source bytes. |
 | `Tokenizer.init(src, dialect)` / `.next()` | Lexer-level token stream for tooling. |
 | `EventReader.fromReader(gpa, reader, options)` | Incremental SAX reader backed by a `std.Io.Reader`. |
 | `EventReader.init(gpa, options)` / `.feed(bytes)` / `.endInput()` | Feed-core variant; caller pushes bytes on demand. |

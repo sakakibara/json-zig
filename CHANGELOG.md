@@ -6,6 +6,31 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Document.setValueSegments` / `Document.setSegments` /
+  `Document.removeSegments`: segment-taking twins of `setValue` / `set`
+  / `remove` that address a path as pre-split key segments (e.g.
+  `&.{ "host", "example.com" }`) instead of a dotted string, so a key
+  containing a literal `.` is addressed unambiguously. The string-path
+  methods now split into segments the same way internally, so dot-free
+  paths behave identically either way.
+- `Document.empty`: bootstrap a document with no source bytes (the
+  "file doesn't exist yet" case). The first `set` (or any segment
+  variant) splices the root object and the whole requested path in as
+  one edit; `Document.parse` still requires well-formed JSON and keeps
+  rejecting empty input.
+
+### Changed
+
+- `Document.set` / `setValue` / `setLiteral` / the new segment setters
+  now create missing intermediate objects along a path, not just the
+  final leaf: `set("a.b.c", v)` on a document lacking `a` or `a.b` now
+  creates them (compact `{"b": {"c": v}}`-style nesting) instead of
+  returning `error.PathNotFound`. Array elements are still never
+  created, only replaced: a `[N]` anywhere in a missing path, including
+  as the leaf, is still `error.PathNotFound`.
+
 ## [0.2.0] - 2026-07-05
 
 ### Changed
