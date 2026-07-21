@@ -58,6 +58,7 @@ pub const Diagnostic = parser_mod.Diagnostic;
 pub const ParseOptions = parser_mod.ParseOptions;
 
 /// Type annotation. See `src/annotation.zig`.
+pub const TypeAnnotationRename = annotation_mod.TypeAnnotationRename;
 pub const TypeAnnotationProvider = annotation_mod.TypeAnnotationProvider;
 pub const TypeAnnotationOptions = annotation_mod.TypeAnnotationOptions;
 pub const DefaultTypes = annotation_mod.DefaultTypes;
