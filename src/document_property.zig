@@ -57,14 +57,22 @@ const ModelEntry = struct {
 };
 
 /// Comment attribution for one direct child of some object (leaf or
-/// nested container), in source order among its siblings. `remove`'s own
-/// documented contract deletes a member "together with ... the trivia
-/// between it and its neighbor", so removing a member can legitimately
-/// carry off its own leading/trailing comment AND an adjacent sibling's
-/// (the next sibling's leading comment for a non-last removal, or the
-/// previous sibling's trailing comment when the last member is removed) --
-/// the remove-invariant uses this to exclude exactly those from the
-/// "comment survives" check.
+/// nested container), in source order among its siblings. `remove`'s
+/// documented contract deletes a member together with "the trivia between
+/// it and its neighbor", and which side that trivia falls on depends on
+/// the removed member's position (see `Document.removeSeg`'s object
+/// branches): a non-last removal spans from the removed member's own key
+/// to the next member's key, sweeping the removed member's own trailing
+/// comment and the next member's leading comment, but never the removed
+/// member's own leading comment (it sits before the deletion start); a
+/// last removal (of more than one member) spans from the previous
+/// member's value to the removed member's value, sweeping the previous
+/// member's trailing comment and the removed member's own leading
+/// comment, but never its own trailing comment (it sits after the
+/// deletion end); removing the sole member wipes the whole interior,
+/// taking both its own leading and trailing. The remove invariant
+/// excludes exactly the trivia the applicable branch sweeps -- never the
+/// union of all of them.
 const MemberComment = struct {
     path: Path,
     leading: ?[]const u8,
@@ -77,8 +85,9 @@ const GenDoc = struct {
     /// Paths of every object node (including the root, `&.{}`), i.e. valid
     /// append/create targets. Arrays are never append targets.
     containers: []const Path,
-    /// Text of every generated comment, checked for presence (not exact
-    /// position) after an edit.
+    /// Delimited token of every generated comment (e.g. `/* note */` or
+    /// `// note\n`), checked for presence by count (not exact position)
+    /// after an edit.
     comments: []const []const u8,
     member_comments: []const MemberComment,
 };
@@ -246,21 +255,27 @@ fn writeLeafValue(aw: *Io.Writer.Allocating, val: json.Value) !Span {
     return .{ .start = start, .end = end };
 }
 
-/// Returns the comment text emitted (if any), so the caller can attribute
-/// it to the member it precedes.
+/// Returns the delimited comment token emitted (if any), so the caller can
+/// attribute it to the member it precedes. The token includes the comment
+/// delimiters (`/* ... */`, or `// ...` through the trailing newline) --
+/// not just the bare word -- so a survival check that searches for the
+/// token can never be fooled by another comment's word that happens to be
+/// a prefix of this one, or by a colliding bare key.
 fn maybeComment(a: Allocator, rng: std.Random, aw: *Io.Writer.Allocating, comments: *std.ArrayList([]const u8)) !?[]const u8 {
     switch (rng.intRangeLessThan(u8, 0, 10)) {
         0 => {
             const text = genCommentText(rng);
-            try comments.append(a, text);
             try aw.writer.print("/* {s} */", .{text});
-            return text;
+            const token = try std.fmt.allocPrint(a, "/* {s} */", .{text});
+            try comments.append(a, token);
+            return token;
         },
         1 => {
             const text = genCommentText(rng);
-            try comments.append(a, text);
             try aw.writer.print("\n// {s}\n", .{text});
-            return text;
+            const token = try std.fmt.allocPrint(a, "// {s}\n", .{text});
+            try comments.append(a, token);
+            return token;
         },
         2 => {
             try aw.writer.writeByte('\n');
@@ -270,14 +285,16 @@ fn maybeComment(a: Allocator, rng: std.Random, aw: *Io.Writer.Allocating, commen
     }
 }
 
-/// Returns the comment text emitted (if any), so the caller can attribute
-/// it to the member it follows.
+/// Returns the delimited comment token emitted (if any), so the caller can
+/// attribute it to the member it follows. See `maybeComment` for why the
+/// token carries its delimiters.
 fn maybeTrailingComment(a: Allocator, rng: std.Random, aw: *Io.Writer.Allocating, comments: *std.ArrayList([]const u8)) !?[]const u8 {
     if (rng.intRangeLessThan(u8, 0, 10) != 0) return null;
     const text = genCommentText(rng);
-    try comments.append(a, text);
     try aw.writer.print(" // {s}\n", .{text});
-    return text;
+    const token = try std.fmt.allocPrint(a, "// {s}\n", .{text});
+    try comments.append(a, token);
+    return token;
 }
 
 fn genObject(
@@ -536,6 +553,65 @@ const Ctx = struct {
     }
 };
 
+// Comment multiset matching
+
+/// Non-overlapping occurrence count of `needle` in `haystack`.
+fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, pos, needle)) |i| {
+        count += 1;
+        pos = i + needle.len;
+    }
+    return count;
+}
+
+const TextCount = struct { text: []const u8, count: usize };
+
+/// Tally `items` by exact-string identity (distinct token -> occurrence
+/// count), so callers can reason about "how many of this comment" rather
+/// than just "is this comment present".
+fn tally(a: Allocator, items: []const []const u8) ![]TextCount {
+    var out: std.ArrayList(TextCount) = .empty;
+    outer: for (items) |s| {
+        for (out.items) |*tc| {
+            if (std.mem.eql(u8, tc.text, s)) {
+                tc.count += 1;
+                continue :outer;
+            }
+        }
+        try out.append(a, .{ .text = s, .count = 1 });
+    }
+    return out.toOwnedSlice(a);
+}
+
+fn countIn(list: []const TextCount, text: []const u8) usize {
+    for (list) |tc| {
+        if (std.mem.eql(u8, tc.text, text)) return tc.count;
+    }
+    return 0;
+}
+
+/// Multiset presence check: every distinct comment token generated for the
+/// source must still appear in `out` at least as many times as it did in
+/// the source, minus however many occurrences of that same token
+/// `excluded` names (trivia the edit's documented contract legitimately
+/// swept). Matching is by exact delimited token and by count, so one
+/// comment's text can't be masked by another's that happens to be a
+/// prefix of it, nor can a real drop hide behind a surviving duplicate.
+/// Returns the first token found short, or null if all survive.
+fn firstLostComment(a: Allocator, source_comments: []const []const u8, excluded: []const []const u8, out: []const u8) !?[]const u8 {
+    const expected = try tally(a, source_comments);
+    const removed = try tally(a, excluded);
+    for (expected) |e| {
+        const removed_count = countIn(removed, e.text);
+        if (removed_count >= e.count) continue;
+        const need = e.count - removed_count;
+        if (countOccurrences(out, e.text) < need) return e.text;
+    }
+    return null;
+}
+
 // Per-case invariant checks
 
 fn runRemoveInvariant(a: Allocator, gen: GenDoc, target: Target, post_set_output: []const u8) !void {
@@ -574,19 +650,31 @@ fn runRemoveInvariant(a: Allocator, gen: GenDoc, target: Target, post_set_output
                 break;
             }
         }
-        if (siblings[idx].leading) |lc| try excluded.append(a, lc);
-        if (siblings[idx].trailing) |tc| try excluded.append(a, tc);
-        if (idx + 1 < siblings.len) {
+        // Branch-for-branch with `Document.removeSeg`'s object cases:
+        // which trivia is swept depends on the removed member's position,
+        // not a fixed union of both sides.
+        if (siblings.len == 1) {
+            // Sole member: the whole interior is wiped.
+            if (siblings[idx].leading) |lc| try excluded.append(a, lc);
+            if (siblings[idx].trailing) |tc| try excluded.append(a, tc);
+        } else if (idx + 1 < siblings.len) {
+            // Non-last: deletion runs key -> next key, carrying off this
+            // member's own trailing comment and the next member's
+            // leading comment. This member's own leading comment sits
+            // before the deletion start and must survive.
+            if (siblings[idx].trailing) |tc| try excluded.append(a, tc);
             if (siblings[idx + 1].leading) |lc| try excluded.append(a, lc);
-        }
-        if (idx > 0) {
+        } else {
+            // Last (of more than one): deletion runs prev value -> this
+            // value, carrying off the previous member's trailing comment
+            // and this member's own leading comment. This member's own
+            // trailing comment sits after the deletion end and must
+            // survive.
+            if (siblings[idx].leading) |lc| try excluded.append(a, lc);
             if (siblings[idx - 1].trailing) |tc| try excluded.append(a, tc);
         }
     }
-    for (gen.comments) |c| {
-        if (containsStr(excluded.items, c)) continue;
-        if (std.mem.indexOf(u8, out, c) == null) return error.RemoveLostComment;
-    }
+    if (try firstLostComment(a, gen.comments, excluded.items, out)) |_| return error.RemoveLostComment;
 }
 
 fn runCase(gpa: Allocator, seed: u64, index: usize) !void {
@@ -633,9 +721,7 @@ fn runCase(gpa: Allocator, seed: u64, index: usize) !void {
         }
 
         ctx.stage = "comment preservation (invariant 5)";
-        for (gen.comments) |c| {
-            if (std.mem.indexOf(u8, out1, c) == null) return error.CommentLost;
-        }
+        if (try firstLostComment(a, gen.comments, &[_][]const u8{}, out1)) |_| return error.CommentLost;
 
         if (target.case_type == .replace) {
             ctx.stage = "byte-exact-except-value (invariant 5b)";
