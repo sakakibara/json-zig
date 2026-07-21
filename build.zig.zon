@@ -1,7 +1,7 @@
 .{
     .name = .json,
     .fingerprint = 0x6b072545257bd162,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
