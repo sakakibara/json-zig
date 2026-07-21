@@ -42,6 +42,18 @@ pub fn build(b: *std.Build) void {
     const run_conformance = b.addRunArtifact(conformance_tests);
     test_step.dependOn(&run_conformance.step);
 
+    // Deterministic property/round-trip battery over the Document editor's
+    // 7 invariants (see src/document_property.zig).
+    const document_property_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/document_property.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_document_property = b.addRunArtifact(document_property_tests);
+    test_step.dependOn(&run_document_property.step);
+
     // Microbenchmarks. Always built ReleaseFast for representative timing.
     // Fixture files are discovered at run time via the injected absolute
     // path, same pattern as the conformance corpus above.
