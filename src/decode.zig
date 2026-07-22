@@ -29,6 +29,7 @@ const testing = std.testing;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const parser_mod = @import("parser.zig");
+const annotation_mod = @import("annotation.zig");
 const lev = @import("levenshtein.zig");
 
 pub const DecodeError = error{
@@ -295,7 +296,7 @@ fn decodeInner(comptime T: type, comptime TAnnotation: type, arena: Allocator, v
         .array => |a| decodeArray(T, TAnnotation, a, arena, value, options, path),
         .optional => |o| decodeOptional(o.child, TAnnotation, arena, value, options, path),
         .@"struct" => |s| decodeStruct(T, TAnnotation, s, arena, value, options, path),
-        .@"enum" => decodeEnum(T, value, arena, options, path),
+        .@"enum" => decodeEnum(T, TAnnotation, value, arena, options, path),
         else => @compileError("json decode: unsupported type " ++ @typeName(T)),
     };
 }
@@ -616,12 +617,35 @@ fn decodeTaggedUnion(comptime T: type, comptime TAnnotation: type, arena: Alloca
     return error.InvalidEnumValue;
 }
 
-fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodeEnum(comptime T: type, comptime TAnnotation: type, value: Value, arena: Allocator, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     switch (value) {
         .string => |s| {
-            if (std.meta.stringToEnum(T, s)) |v| return v;
+            // Build comptime table for renames which will then be checked runtime.
+            const lookup_table = comptime blk: {
+                if (TAnnotation.getOrEmpty(T)) |a| {
+                    if (a.json_rename) |r| break :blk r;
+                }
+                if (@hasDecl(T, "json_rename")) {
+                    const renames = T.json_rename;
+                    var entries: []const annotation_mod.TypeAnnotationRename = &.{};
+
+                    for (@typeInfo(@TypeOf(renames)).@"struct".decls) |d| {
+                        entries = entries ++ &[_]annotation_mod.TypeAnnotationRename{
+                            .{ .from = @field(renames, d.name), .to = d.name },
+                        };
+                    }
+                    break :blk entries;
+                }
+                break :blk &.{};
+            };
+
+            const entry = for (lookup_table) |rf| {
+                if (std.mem.eql(u8, rf.from, s)) break rf.to;
+            } else s;
+
+            if (std.meta.stringToEnum(T, entry)) |v| return v;
             if (options.errors) |list| {
-                const msg = try std.fmt.allocPrint(arena, "invalid enum value `{s}` for {s}", .{ s, @typeName(T) });
+                const msg = try std.fmt.allocPrint(arena, "invalid enum value `{s}` for {s}", .{ entry, @typeName(T) });
                 try appendDiag(list, arena, path, msg, null);
             }
             return error.InvalidEnumValue;
@@ -808,8 +832,8 @@ fn streamValue(comptime T: type, comptime TAnnotation: type, p: *parser_mod.Pars
             else => error.TypeMismatch,
         },
         .@"enum" => switch (t.kind) {
-            .string => try decodeEnum(T, .{ .string = try p.decodeString(t) }, p.arena, p.options, &path),
-            .number => try decodeEnum(T, try p.parseNumber(t), p.arena, p.options, &path),
+            .string => try decodeEnum(T, TAnnotation, .{ .string = try p.decodeString(t) }, p.arena, p.options, &path),
+            .number => try decodeEnum(T, TAnnotation, try p.parseNumber(t), p.arena, p.options, &path),
             else => error.TypeMismatch,
         },
         .pointer => |ptr| try streamPointer(T, TAnnotation, ptr, p, t, depth),
