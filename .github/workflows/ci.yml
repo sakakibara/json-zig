@@ -22,7 +22,7 @@ jobs:
           - macos-latest       # aarch64-macos
           - windows-latest     # x86_64-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: install zig (unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -70,7 +70,7 @@ jobs:
           - riscv64-linux-gnu     # 64-bit little-endian (RISC-V)
           - wasm32-wasi           # 32-bit wasm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: install zig
         shell: bash
         run: |
