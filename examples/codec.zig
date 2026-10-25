@@ -3,7 +3,7 @@ const std = @import("std");
 const FieldAttributes = std.builtin.Type.UnionField.Attributes; // std.lang.Type.Union.Attributes in master
 
 fn fullName(comptime container: []const u8, comptime short: []const u8) []const u8 {
-    return "PvZCards.Engine." ++ container ++ "." ++ short ++ ", EngineLib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null";
+    return "Game." ++ container ++ "." ++ short;
 }
 
 fn buildRenames(comptime fields: anytype, container: []const u8, suffix: []const u8, decls: anytype) [fields.len]json.AnnotationRename {
@@ -194,12 +194,12 @@ pub fn main() !void {
         @setEvalBranchQuota(15_000);
     }
 
-    const card = try DescriptorJsonRegistry.parseInto(CardDescriptor, .codec_then_local, allocator, src, .{});
+    const card = try DescriptorJsonRegistry.parseInto(CardDescriptor, allocator, src, .{});
     std.debug.print("{s}\n", .{if (card.prefabName) |pn| pn else "null"});
 
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
-    try DescriptorJsonRegistry.encodeTyped(.codec_then_local, &aw.writer, card, allocator, .{ .indent = 2, .sort_keys = false });
+    try DescriptorJsonRegistry.encodeTyped(&aw.writer, card, allocator, .{ .indent = 2, .sort_keys = false });
     std.debug.print("{s}", .{aw.written()});
 }

@@ -10,12 +10,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Codec` and `Annotations(T)`: supply `json_rename` (as
   `AnnotationRename` pairs), `json_skip`, `json_flatten`, `json_tag`,
-  `json_payload`, and `fromJson` / `toJson` hooks for a type from outside
-  it, for types that cannot carry declarations (built with `@Struct`
-  or `@Union`, or owned by another package). A codec's
-  `parseInto`, `parseIntoReader`, `decode`, and `encodeTyped` take an
-  `AnnotationsSource` that chooses whether a codec entry or the type's
-  own declaration takes precedence.
+  `json_payload`, and a `hooks` namespace of `fromJson` / `toJson` for a
+  type from outside it: a type built with `@Struct` or `@Union` cannot
+  carry declarations, and a type from another package cannot be edited to
+  add them. A codec's `parseInto`, `parseIntoReader`, `decode`, and
+  `encodeTyped` mirror the module's own; a non-null entry value wins over
+  the type's own declaration, and a null one falls back to it.
 - `json_payload` on a tagged union puts the active variant's payload
   under one named member next to the discriminator
   (`{"kind":"version","value":{...}}`) instead of inlining the payload's

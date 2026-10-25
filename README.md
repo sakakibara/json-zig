@@ -468,17 +468,18 @@ through an edit cycle, and its comment-editing calls
 | `ValueStream.fromReader(gpa, reader, options)` | Record iterator over a JSON array or NDJSON stream. |
 
 #### Codec API
-API exposes `Codec(entries)` entry points, which mirror base API (unchanged for compatibility reasons)
-and allow users to provide hooks for external and comptime-generated types, which lack support
-for annotation via declarations. All functions internally share logic with base API and accept
-`codec_priority` for explicit control over annotation precedence.
+`Codec(entries)` takes a tuple of `Annotations(T)` values and returns entry
+points that mirror the module's own, for types that cannot carry
+annotation declarations (built with `@Struct` / `@Union`, or from another
+package). For each type and property, a non-null entry value wins over the
+type's own declaration; a null one falls back to it.
 
 | Function | Purpose |
 | --- | --- |
-| `Codec.parseInto(T, codec_priority, arena, src, options)` | Decode straight into an instance of `T`. |
-| `Codec.parseIntoReader(T, codec_priority, arena, reader, options)` | Reader-input variant of `parseInto`. |
-| `Codec.decode(T, codec_priority, arena, value, options)` | Decode an existing `Value` into `T`. |
-| `Codec.encodeTyped(codec_priority, w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
+| `Codec.parseInto(T, arena, src, options)` | Decode straight into an instance of `T`. |
+| `Codec.parseIntoReader(T, arena, reader, options)` | Reader-input variant of `parseInto`. |
+| `Codec.decode(T, arena, value, options)` | Decode an existing `Value` into `T`. |
+| `Codec.encodeTyped(w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
 
 ### Types
 
@@ -486,8 +487,7 @@ for annotation via declarations. All functions internally share logic with base 
 `Dialect`, `NumberMode`, `PrettyOptions`, `Error`, `ReaderError`, `DecodeError`,
 `EncodeError`, `DocumentError`, `Document`, `Token`, `TokenKind`,
 `EventReader`, `Event`, `StreamOptions`, `StreamError`, `ValueStream`,
-`StreamShape`, `AnnotationRename`, `Annotations(T)`, `AnnotationsSource`,
-`Codec(entries)`.
+`StreamShape`, `AnnotationRename`, `Annotations(T)`, `Codec(entries)`.
 
 Generated reference docs are published at
 **https://sakakibara.github.io/json-zig/**.
