@@ -163,6 +163,7 @@ fn writeTypedValue(comptime T: type, comptime TCodec: type, value: T, w: *Io.Wri
 /// ascending key order.
 fn writeTypedObject(comptime T: type, comptime TCodec: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     comptime decode_mod.validateAnnotations(T);
+    comptime codec_mod.checkUse(TCodec, T);
     if (options.sort_keys) return writeTypedObjectSorted(T, TCodec, value, w, arena, options, depth);
     try w.writeByte('{');
     var first = true;
@@ -219,6 +220,7 @@ fn writeTypedMember(w: *Io.Writer, key: []const u8, options: EncodeOptions, dept
 
 fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_field: []const u8, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     comptime decode_mod.validateAnnotations(T);
+    comptime codec_mod.checkUse(TCodec, T);
     if (options.sort_keys) return writeTypedTaggedUnionSorted(T, TCodec, tag_field, value, w, arena, options, depth);
     const active = std.meta.activeTag(value);
     try w.writeByte('{');

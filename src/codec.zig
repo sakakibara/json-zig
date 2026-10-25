@@ -92,121 +92,162 @@ pub fn Annotations(comptime T: type) type {
 // ```
 pub fn Codec(comptime entries: anytype) type {
     comptime {
-        for (entries, 0..) |annotation, i| {
-            const TOption = @TypeOf(annotation);
-            if (!@hasDecl(TOption, "associated_type")) break;
+        for (0..entries.len) |i| checkEntry(entries, i);
+    }
+    return struct {
+        const annotations = entries;
+        const Self = @This();
 
-            const T = TOption.associated_type;
-            if (TOption != Annotations(T)) break;
+        /// Decode a parsed `Value` tree into `T` via comptime reflection.
+        /// Supports bool, ints (overflow-checked), floats, `[]const u8`,
+        /// slices, fixed-size arrays, optionals, nested structs, enums (string
+        /// name or integer tag), tagged unions via `json_tag`, embedded `Value`
+        /// fields (kept dynamic), custom `fromJson` hooks, and the
+        /// `json_rename` / `json_skip` / `json_flatten` / `json_payload`
+        /// annotations, each annotation and hook taken from this codec's entry
+        /// for the type when non-null, else from the type's own declarations.
+        ///
+        /// Number policy: float targets accept `.integer` values, but integer
+        /// targets do NOT accept `.float` -- `1e2` parses as `.float` and stays
+        /// one. In typed mode, integer literals in the range [minInt(i128),
+        /// maxInt(i128)] decode into any integer target that fits (overflow
+        /// returns `error.Overflow`). For u128 or literals beyond i128 range,
+        /// use `number_mode = .raw` so the lexeme decodes directly into the
+        /// target. JSON `null` decodes only into optional targets; anywhere else
+        /// it errors like an absent field. See `src/decode.zig`.
+        pub fn decode(comptime T: type, arena: std.mem.Allocator, value: Value, options: ParseOptions) DecodeError!T {
+            return decode_mod.decode(T, Self, arena, value, options);
+        }
 
-            for (0..i) |j| {
-                const TPrev = @TypeOf(entries[j]);
-                if (TPrev.associated_type == T) {
-                    @compileError("Duplicate Annotations(T) entry found for " ++ @typeName(T));
-                }
+        /// Decode `src` directly into a `T` using this codec's entries.
+        /// Types without `Value` fields, `fromJson` hooks, or tagged unions decode in
+        /// a single streaming pass with no intermediate `Value` tree; other types
+        /// (and calls requesting `options.spans`) parse to a tree first. Both paths
+        /// accept and reject identically. All allocations land in `arena`; string
+        /// fields may be zero-copy slices into `src`, so keep `src` alive while the
+        /// result is in use.
+        pub fn parseInto(comptime T: type, arena: std.mem.Allocator, src: []const u8, options: ParseOptions) (Error || DecodeError)!T {
+            return decode_mod.parseInto(T, Self, arena, src, options);
+        }
+
+        /// Reader-input variant of `parseInto`: drains the reader into arena
+        /// memory, then parses and decodes.
+        pub fn parseIntoReader(comptime T: type, arena: std.mem.Allocator, reader: *std.Io.Reader, options: ParseOptions) (ReaderError || DecodeError)!T {
+            return decode_mod.parseIntoReader(T, Self, arena, reader, options);
+        }
+
+        /// Encode a typed Zig value as JSON, honoring the same `json_rename` /
+        /// `json_skip` / `json_flatten` / `json_tag` / `json_payload` annotations
+        /// and `toJson` hooks that `decode` honors, so the output decodes back
+        /// through this codec's `parseInto`. Null optional fields are omitted
+        /// entirely; enums emit their tag name as a string; tagged unions emit the
+        /// discriminator member first, then either the payload's fields inline or,
+        /// with `json_payload`, the payload under that member. `options.indent` pretty-prints
+        /// and `options.sort_keys` emits members in ascending key order (declaration
+        /// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
+        /// the buffers `sort_keys` uses to reorder members.
+        ///
+        /// Each type's annotations and hooks come from this codec's entry for it
+        /// where the entry's value is non-null, else from the type's own
+        /// declarations.
+        pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
+            return encoder_mod.encodeTyped(Self, w, value, arena, options);
+        }
+
+        fn find(comptime T: type) ?Annotations(T) {
+            return inline for (annotations) |annotation_entry| {
+                const TOption = @TypeOf(annotation_entry);
+                if (TOption.associated_type == T) break annotation_entry;
+            } else null;
+        }
+    };
+}
+
+fn label(comptime i: usize, comptime T: type) []const u8 {
+    return std.fmt.comptimePrint("Codec entry {d}, Annotations({s})", .{ i, @typeName(T) });
+}
+
+fn isKeyed(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct", .@"union" => T != Value,
+        else => false,
+    };
+}
+
+fn checkNamesExist(comptime i: usize, comptime T: type, comptime prop: []const u8, comptime names: anytype) void {
+    comptime {
+        const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
+        for (names) |name| {
+            if (!@hasField(T, name)) {
+                @compileError(label(i, T) ++ "." ++ prop ++ ": `" ++ name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
             }
+        }
+    }
+}
 
-            const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
-            if (annotation.json_rename) |rename| {
-                for (rename) |rf| {
-                    if (!@hasField(T, rf.zig_name)) {
-                        @compileError("json_rename entry `" ++ rf.zig_name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
+/// Construction-time checks of `entries[i]` on its own.
+fn checkEntry(comptime entries: anytype, comptime i: usize) void {
+    comptime {
+        const E = @TypeOf(entries[i]);
+        if (@typeInfo(E) != .@"struct" or !@hasDecl(E, "associated_type") or E != Annotations(E.associated_type)) {
+            @compileError(std.fmt.comptimePrint("Codec entry {d} has type {s}; each entry must be an Annotations(T) value", .{ i, @typeName(E) }));
+        }
+        const T = E.associated_type;
+        const entry: E = entries[i];
+        const rename_count = if (entry.json_rename) |r| r.len else 0;
+        @setEvalBranchQuota(quadraticQuota(Budget(T).members + rename_count + entries.len));
+        for (0..i) |j| {
+            if (@TypeOf(entries[j]) == E) {
+                @compileError(std.fmt.comptimePrint("Codec entries {d} and {d} both annotate {s}; give each type one Annotations(T) entry", .{ j, i, @typeName(T) }));
+            }
+        }
+        if (T == Value) {
+            @compileError(label(i, T) ++ ": json.Value cannot be annotated; codec entries annotate structs and tagged unions");
+        }
+        if (!isKeyed(T)) {
+            @compileError(label(i, T) ++ ": " ++ @typeName(T) ++ " is not a struct or union; codec entries annotate structs and tagged unions");
+        }
+        const is_union = @typeInfo(T) == .@"union";
+
+        if (entry.json_rename) |renames| {
+            for (renames, 0..) |r, k| {
+                checkNamesExist(i, T, "json_rename", .{r.zig_name});
+                for (renames[0..k]) |prev| {
+                    if (std.mem.eql(u8, prev.zig_name, r.zig_name)) {
+                        @compileError(label(i, T) ++ ".json_rename: `" ++ r.zig_name ++ "` is renamed twice");
                     }
                 }
             }
-            if (annotation.json_skip) |skip| {
-                for (skip) |name| {
-                    if (!@hasField(T, name)) {
-                        @compileError("json_skip entry `" ++ name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
-                    }
+        }
+        if (entry.json_skip) |skip| {
+            if (is_union) @compileError(label(i, T) ++ ".json_skip: json_skip applies to structs only, and " ++ @typeName(T) ++ " is a union");
+            checkNamesExist(i, T, "json_skip", skip);
+        }
+        if (entry.json_flatten) |flatten| {
+            if (is_union) @compileError(label(i, T) ++ ".json_flatten: json_flatten applies to structs only, and " ++ @typeName(T) ++ " is a union");
+            checkNamesExist(i, T, "json_flatten", flatten);
+            for (flatten) |name| {
+                if (@typeInfo(@FieldType(T, name)) != .@"struct") {
+                    @compileError(label(i, T) ++ ".json_flatten: field `" ++ name ++ "` has type " ++ @typeName(@FieldType(T, name)) ++ ", and only a struct field can be flattened");
                 }
             }
-            if (annotation.json_flatten) |flatten| {
-                for (flatten) |name| {
-                    if (!@hasField(T, name)) {
-                        @compileError("json_flatten entry `" ++ name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
-                    }
+        }
+        if (!is_union) {
+            if (entry.json_tag != null) @compileError(label(i, T) ++ ".json_tag: json_tag applies to tagged unions only, and " ++ @typeName(T) ++ " is a struct");
+            if (entry.json_payload != null) @compileError(label(i, T) ++ ".json_payload: json_payload applies to tagged unions only, and " ++ @typeName(T) ++ " is a struct");
+        }
+        if (entry.json_tag) |tag| {
+            if (entry.json_payload) |payload| {
+                // Restating both declared values leaves the type-local
+                // error, raised where the union is used.
+                const restated = @hasDecl(T, "json_tag") and std.mem.eql(u8, tag, T.json_tag) and
+                    @hasDecl(T, "json_payload") and std.mem.eql(u8, payload, T.json_payload);
+                if (std.mem.eql(u8, tag, payload) and !restated) {
+                    @compileError(label(i, T) ++ ".json_payload: `" ++ payload ++ "` is also the json_tag; the discriminator and the payload need different members");
                 }
             }
-
-            if (annotation.hooks) |Hooks| checkHooksNamespace(T, Hooks);
-
-            if (@typeInfo(T) == .@"union" and
-                annotation.json_tag != null and
-                annotation.json_payload != null and
-                std.mem.eql(u8, annotation.json_tag.?, annotation.json_payload.?))
-            {
-                @compileError("json_tag and json_payload collision - cannot share the field name.");
-            }
-        } else return struct {
-            const annotations = entries;
-            const Self = @This();
-
-            /// Decode a parsed `Value` tree into `T` via comptime reflection.
-            /// Supports bool, ints (overflow-checked), floats, `[]const u8`,
-            /// slices, fixed-size arrays, optionals, nested structs, enums (string
-            /// name or integer tag), tagged unions via `json_tag`, embedded `Value`
-            /// fields (kept dynamic), custom `fromJson` hooks, and the
-            /// `json_rename` / `json_skip` / `json_flatten` / `json_payload`
-            /// annotations, each annotation and hook taken from this codec's entry
-            /// for the type when non-null, else from the type's own declarations.
-            ///
-            /// Number policy: float targets accept `.integer` values, but integer
-            /// targets do NOT accept `.float` -- `1e2` parses as `.float` and stays
-            /// one. In typed mode, integer literals in the range [minInt(i128),
-            /// maxInt(i128)] decode into any integer target that fits (overflow
-            /// returns `error.Overflow`). For u128 or literals beyond i128 range,
-            /// use `number_mode = .raw` so the lexeme decodes directly into the
-            /// target. JSON `null` decodes only into optional targets; anywhere else
-            /// it errors like an absent field. See `src/decode.zig`.
-            pub fn decode(comptime T: type, arena: std.mem.Allocator, value: Value, options: ParseOptions) DecodeError!T {
-                return decode_mod.decode(T, Self, arena, value, options);
-            }
-
-            /// Decode `src` directly into a `T` using this codec's entries.
-            /// Types without `Value` fields, `fromJson` hooks, or tagged unions decode in
-            /// a single streaming pass with no intermediate `Value` tree; other types
-            /// (and calls requesting `options.spans`) parse to a tree first. Both paths
-            /// accept and reject identically. All allocations land in `arena`; string
-            /// fields may be zero-copy slices into `src`, so keep `src` alive while the
-            /// result is in use.
-            pub fn parseInto(comptime T: type, arena: std.mem.Allocator, src: []const u8, options: ParseOptions) (Error || DecodeError)!T {
-                return decode_mod.parseInto(T, Self, arena, src, options);
-            }
-
-            /// Reader-input variant of `parseInto`: drains the reader into arena
-            /// memory, then parses and decodes.
-            pub fn parseIntoReader(comptime T: type, arena: std.mem.Allocator, reader: *std.Io.Reader, options: ParseOptions) (ReaderError || DecodeError)!T {
-                return decode_mod.parseIntoReader(T, Self, arena, reader, options);
-            }
-
-            /// Encode a typed Zig value as JSON, honoring the same `json_rename` /
-            /// `json_skip` / `json_flatten` / `json_tag` / `json_payload` annotations
-            /// and `toJson` hooks that `decode` honors, so the output decodes back
-            /// through this codec's `parseInto`. Null optional fields are omitted
-            /// entirely; enums emit their tag name as a string; tagged unions emit the
-            /// discriminator member first, then either the payload's fields inline or,
-            /// with `json_payload`, the payload under that member. `options.indent` pretty-prints
-            /// and `options.sort_keys` emits members in ascending key order (declaration
-            /// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
-            /// the buffers `sort_keys` uses to reorder members.
-            ///
-            /// Each type's annotations and hooks come from this codec's entry for it
-            /// where the entry's value is non-null, else from the type's own
-            /// declarations.
-            pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
-                return encoder_mod.encodeTyped(Self, w, value, arena, options);
-            }
-
-            fn find(comptime T: type) ?Annotations(T) {
-                return inline for (annotations) |annotation_entry| {
-                    const TOption = @TypeOf(annotation_entry);
-                    if (TOption.associated_type == T) break annotation_entry;
-                } else null;
-            }
-        };
-
-        @compileError("Type annotation should be exactly an Annotations(T) instance.");
+        }
+        if (entry.hooks) |Hooks| checkHooksNamespace(T, Hooks);
     }
 }
 
@@ -229,10 +270,394 @@ fn checkHooksNamespace(comptime T: type, comptime Hooks: type) void {
     }
 }
 
+/// Instantiation-time check for struct or union `T` reached through codec
+/// `C`. A union's effective `json_tag` and `json_payload` must differ. Every
+/// other check is one rule over the object's layout: a codec may not create
+/// a layout problem that the declarations alone do not already have where
+/// it occurs.
+pub fn checkUse(comptime C: type, comptime T: type) void {
+    comptime {
+        if (@typeInfo(T) == .@"union") checkTagPayload(C, T);
+        if (C.annotations.len == 0) return;
+        @setEvalBranchQuota(quadraticQuota(Budget(T).tree));
+        const layout = objectLayout(C, T, &.{}, 0);
+        if (!layout.touched) return;
+        // Pairs sharing one key are at most quadratic in the layout's size.
+        @setEvalBranchQuota(quadraticQuota(layoutSize(layout)));
+        checkEach(C, T, layout, .tag_payload);
+        checkKeys(C, T, layout, &.{}, 0);
+        checkEach(C, T, layout, .wire_names);
+        checkEach(C, T, layout, .inlined);
+    }
+}
+
+/// The type's own declarations alone, to tell what a codec value changed.
+const Local = Codec(.{});
+
+/// One step of a member's path: field or variant `name` of `owner`.
+const Step = struct { owner: type, name: []const u8 };
+
+const Role = enum { field, tag, payload };
+
+/// A member of an object. A tag or payload member belongs to union `at`.
+/// The declarations alone give the member its key, from the type owning
+/// its path's step `n` onward, exactly when `local_from <= n`.
+const Member = struct { key: []const u8, path: []const Step, role: Role, at: type = void, local_from: usize };
+
+const never = std.math.maxInt(usize);
+
+const Inlined = struct { type: type, path: []const Step };
+
+/// The members of one JSON object that its own type contributes and the
+/// structs it inlines. For a union with an inline payload, `variants` holds
+/// one layout per variant, whose members appear alongside these but never
+/// alongside another variant's. `touched` is whether any type in the tree
+/// has a codec entry.
+const Layout = struct {
+    members: []const Member = &.{},
+    inlined: []const Inlined = &.{},
+    variants: []const Layout = &.{},
+    touched: bool = false,
+};
+
+/// The layout `X` contributes at `path`, from the same lookups decode and
+/// encode use. A flattened non-struct field adds nothing, since decode and
+/// encode do not support it; a union with no `json_tag` adds nothing. Steps
+/// `pre` and later of `path` are all inlined by the declarations alone.
+fn objectLayout(comptime C: type, comptime X: type, comptime path: []const Step, comptime pre: usize) Layout {
+    comptime {
+        const touched = C.find(X) != null;
+        switch (@typeInfo(X)) {
+            .@"struct" => |s| {
+                var l = fieldsLayout(C, X, s.fields, path, pre);
+                l.touched = l.touched or touched;
+                return l;
+            },
+            .@"union" => |u| {
+                if (X == Value) return .{};
+                const tag = entryOf(C, X).json_tag orelse if (@hasDecl(X, "json_tag")) X.json_tag else return .{ .touched = touched };
+                const local_tag = @hasDecl(X, "json_tag") and std.mem.eql(u8, X.json_tag, tag);
+                const tag_member: Member = .{ .key = tag, .path = path, .role = .tag, .at = X, .local_from = if (local_tag) pre else never };
+                if (decode_mod.getJsonPayload(X, C)) |payload| {
+                    const declared = decode_mod.getJsonPayload(X, Local);
+                    const local = @hasDecl(X, "json_tag") and declared != null and std.mem.eql(u8, declared.?, payload);
+                    const payload_member: Member = .{ .key = payload, .path = path, .role = .payload, .at = X, .local_from = if (local) pre else never };
+                    return .{ .members = &.{ tag_member, payload_member }, .touched = touched };
+                }
+                // Every variant step of one union is inlined alike.
+                const inlined = u.fields.len != 0 and localStep(X, u.fields[0].name) == .inlined;
+                var variants: [u.fields.len]Layout = undefined;
+                var any = touched;
+                for (u.fields, &variants) |f, *v| {
+                    const at = path ++ &[_]Step{.{ .owner = X, .name = f.name }};
+                    const P = Unwrapped(f.type);
+                    v.* = objectLayout(C, P, at, if (inlined) pre else at.len);
+                    if (@typeInfo(P) == .@"struct") v.inlined = &[_]Inlined{.{ .type = P, .path = at }} ++ v.inlined;
+                    any = any or v.touched;
+                }
+                const fixed = variants;
+                return .{ .members = &.{tag_member}, .variants = &fixed, .touched = any };
+            },
+            else => return .{},
+        }
+    }
+}
+
+/// The layout of `fields` of struct `S`, concatenated by halves to stay
+/// O(n log n).
+fn fieldsLayout(comptime C: type, comptime S: type, comptime fields: []const std.builtin.Type.StructField, comptime path: []const Step, comptime pre: usize) Layout {
+    comptime {
+        if (fields.len > 1) {
+            const a = fieldsLayout(C, S, fields[0 .. fields.len / 2], path, pre);
+            const b = fieldsLayout(C, S, fields[fields.len / 2 ..], path, pre);
+            return .{ .members = a.members ++ b.members, .inlined = a.inlined ++ b.inlined, .touched = a.touched or b.touched };
+        }
+        if (fields.len == 0) return .{};
+        const f = fields[0];
+        if (decode_mod.isSkipped(S, C, f.name)) return .{};
+        const at = path ++ &[_]Step{.{ .owner = S, .name = f.name }};
+        const local = localStep(S, f.name);
+        if (!decode_mod.isFlattened(S, C, f.name)) {
+            const key = decode_mod.renamedKey(S, C, f.name);
+            const same = local == .key and std.mem.eql(u8, local.key, key);
+            return .{ .members = &.{.{ .key = key, .path = at, .role = .field, .local_from = if (same) pre else never }} };
+        }
+        if (@typeInfo(f.type) != .@"struct") return .{};
+        var l = objectLayout(C, f.type, at, if (local == .inlined) pre else at.len);
+        l.inlined = &[_]Inlined{.{ .type = f.type, .path = at }} ++ l.inlined;
+        return l;
+    }
+}
+
+/// Field or variant `name` of `owner` by declarations alone: left out of
+/// the object, written under `key`, or inlined into the enclosing object.
+fn localStep(comptime owner: type, comptime name: []const u8) union(enum) { absent, key: []const u8, inlined } {
+    comptime {
+        if (@typeInfo(owner) == .@"union") {
+            return if (@hasDecl(owner, "json_tag") and decode_mod.getJsonPayload(owner, Local) == null) .inlined else .absent;
+        }
+        if (decode_mod.isSkipped(owner, Local, name)) return .absent;
+        if (decode_mod.isFlattened(owner, Local, name)) return .inlined;
+        return .{ .key = decode_mod.renamedKey(owner, Local, name) };
+    }
+}
+
+/// `items` sorted by key, equal keys kept in order.
+fn sortByKey(comptime items: []const Member) []const Member {
+    comptime {
+        if (items.len < 2) return items;
+        const a = sortByKey(items[0 .. items.len / 2]);
+        const b = sortByKey(items[items.len / 2 ..]);
+        var out: [items.len]Member = undefined;
+        var i = 0;
+        for (&out, 0..) |*m, n| {
+            const k = n - i;
+            if (k == b.len or (i < a.len and std.mem.order(u8, b[k].key, a[i].key) != .lt)) {
+                m.* = a[i];
+                i += 1;
+            } else m.* = b[k];
+        }
+        const fixed = out;
+        return &fixed;
+    }
+}
+
+fn Unwrapped(comptime P: type) type {
+    return if (@typeInfo(P) == .optional) Unwrapped(@typeInfo(P).optional.child) else P;
+}
+
+fn layoutSize(comptime l: Layout) usize {
+    comptime {
+        var n = l.members.len + l.inlined.len + l.variants.len;
+        for (l.variants) |v| n += layoutSize(v);
+        return n;
+    }
+}
+
+/// Runs one check on every union or inlined struct of `l`, outer first.
+fn checkEach(comptime C: type, comptime T: type, comptime l: Layout, comptime check: enum { tag_payload, wire_names, inlined }) void {
+    comptime {
+        switch (check) {
+            .tag_payload => for (l.members) |m| {
+                if (m.role == .tag) checkTagPayload(C, m.at);
+            },
+            .wire_names => for (l.members) |m| {
+                if (m.role == .tag) checkWireNames(C, T, m.at, m.path);
+            },
+            .inlined => for (l.inlined) |s| checkInlined(C, T, s.type, s.path),
+        }
+        for (l.variants) |v| checkEach(C, T, v, check);
+    }
+}
+
+/// Two members that can appear together may share a key only when the
+/// innermost type owning both gives them that key by its declarations.
+/// A layout's members appear with each other and with `outer`, those of the
+/// layouts enclosing it, but never with another variant's, so only those
+/// pairs are compared, and only where the keys are equal and one member's
+/// key is not the declarations' from `depth`, the path length all share.
+fn checkKeys(comptime C: type, comptime T: type, comptime l: Layout, comptime outer: []const Member, comptime depth: usize) void {
+    comptime {
+        const members = sortByKey(l.members);
+        var start = 0;
+        while (start < members.len) {
+            var end = start + 1;
+            while (end < members.len and std.mem.eql(u8, members[end].key, members[start].key)) end += 1;
+            const run = members[start..end];
+            for (outer) |o| {
+                if (std.mem.eql(u8, o.key, run[0].key)) for (run) |m| checkPair(C, T, o, m);
+            }
+            for (run, 0..) |a, i| {
+                if (a.local_from <= depth) continue;
+                for (run, 0..) |b, k| {
+                    if (k < i and b.local_from > depth) continue;
+                    if (k < i) checkPair(C, T, b, a) else if (k > i) checkPair(C, T, a, b);
+                }
+            }
+            start = end;
+        }
+        for (l.variants) |v| checkKeys(C, T, v, outer ++ l.members, depth + 1);
+    }
+}
+
+/// `a` and `b` share a key; `a` comes first in the object.
+fn checkPair(comptime C: type, comptime T: type, comptime a: Member, comptime b: Member) void {
+    comptime {
+        var n: usize = 0;
+        while (n < a.path.len and n < b.path.len and std.mem.eql(u8, a.path[n].name, b.path[n].name)) n += 1;
+        if (a.local_from <= n and b.local_from <= n) return;
+        @compileError(@typeName(T) ++ ": key `" ++ a.key ++ "` comes from both " ++ describe(C, a) ++ " and " ++ describe(C, b) ++
+            "; members of one object may share a key only where the declarations alone already give it to both");
+    }
+}
+
+/// Decode takes the first variant whose wire name matches, so two variants
+/// sharing one leave the second unreachable. Without a codec `json_rename`
+/// every wire name is the declared one.
+fn checkWireNames(comptime C: type, comptime T: type, comptime U: type, comptime path: []const Step) void {
+    comptime {
+        if (entryOf(C, U).json_rename == null) return;
+        const fields = @typeInfo(U).@"union".fields;
+        var names: [fields.len]Member = undefined;
+        for (fields, &names) |f, *m| {
+            const name = decode_mod.renamedKey(U, C, f.name);
+            const same = std.mem.eql(u8, decode_mod.renamedKey(U, Local, f.name), name);
+            m.* = .{ .key = name, .path = &.{.{ .owner = U, .name = f.name }}, .role = .field, .local_from = if (same) 0 else never };
+        }
+        const sorted = sortByKey(&names);
+        for (sorted[1..], 1..) |b, k| {
+            const a = sorted[k - 1];
+            if (!std.mem.eql(u8, a.key, b.key) or (a.local_from == 0 and b.local_from == 0)) continue;
+            const where = if (path.len == 0) "" else " at " ++ pathName(path);
+            @compileError(@typeName(T) ++ ": variants `" ++ a.path[0].name ++ "` and `" ++ b.path[0].name ++ "` of " ++ @typeName(U) ++ where ++
+                " both have the wire name `" ++ a.key ++ "` (shaped by " ++ entryLabel(C, U) ++ ".json_rename); variants may share a wire name only where the declarations alone already give it to both");
+        }
+    }
+}
+
+/// An inlined struct is decoded by its `fromJson` but encoded by reflection,
+/// so one with hooks is allowed only where the declarations alone inline it
+/// with the same hooks.
+fn checkInlined(comptime C: type, comptime T: type, comptime S: type, comptime path: []const Step) void {
+    comptime {
+        const from = decode_mod.hasFromJson(S, C);
+        const to = decode_mod.hasToJson(S, C);
+        if (!from and !to) return;
+        const Hooks = decode_mod.HookSource(S, C);
+        const same_hooks = for ([_][]const u8{ "fromJson", "toJson" }) |name| {
+            if (@hasDecl(Hooks, name) != @hasDecl(S, name)) break false;
+            if (@hasDecl(S, name) and @field(Hooks, name) != @field(S, name)) break false;
+        } else true;
+        const last = path[path.len - 1];
+        if (same_hooks and localStep(last.owner, last.name) == .inlined) return;
+        var cause = causes(C, path, null, void);
+        if (!same_hooks) cause = join(cause, entryLabel(C, S) ++ ".hooks", " and ");
+        const as = if (@typeInfo(last.owner) == .@"union") "an inline payload" else "a flattened struct";
+        const what = if (from and to)
+            "has fromJson and toJson; " ++ as ++ " is decoded by its fromJson but encoded by reflection instead of its toJson"
+        else if (from)
+            "has fromJson; " ++ as ++ " is decoded by its fromJson but encoded by reflection"
+        else
+            "has toJson; " ++ as ++ " is encoded by reflection instead of its toJson";
+        const subject = if (@typeInfo(last.owner) == .@"union")
+            pathName(path) ++ " inlines " ++ @typeName(S) ++ ", which " ++ what
+        else
+            pathName(path) ++ " is flattened, but " ++ @typeName(S) ++ " " ++ what;
+        @compileError(@typeName(T) ++ ": " ++ subject ++ ", so " ++ cause ++ " may not combine the two");
+    }
+}
+
+/// `path` in words: its variant steps, then its field steps as one dotted
+/// field. Only a variant's payload can be another union, so variant steps
+/// all come first.
+fn pathName(comptime path: []const Step) []const u8 {
+    comptime {
+        var variants: []const u8 = "";
+        var fields: []const u8 = "";
+        for (path) |s| {
+            if (@typeInfo(s.owner) == .@"union") {
+                variants = join(variants, "variant `" ++ s.name ++ "`", "'s ");
+            } else fields = join(fields, s.name, ".");
+        }
+        return join(variants, if (fields.len == 0) "" else "field `" ++ fields ++ "`", "'s ");
+    }
+}
+
+fn describe(comptime C: type, comptime m: Member) []const u8 {
+    const what = switch (m.role) {
+        .field => pathName(m.path),
+        .tag, .payload => "the json_" ++ @tagName(m.role) ++ (if (m.path.len == 0) "" else " of " ++ @typeName(m.at) ++ " at " ++ pathName(m.path)),
+    };
+    const cause = causes(C, m.path, m.role, m.at);
+    return if (cause.len == 0) what else what ++ " (shaped by " ++ cause ++ ")";
+}
+
+/// The codec properties along `path` that differ from the declarations:
+/// those that bring the member (with `role`, or an inlined struct when
+/// null) into the object or change its key.
+fn causes(comptime C: type, comptime path: []const Step, comptime role: ?Role, comptime at: type) []const u8 {
+    comptime {
+        var list: []const []const u8 = &.{};
+        for (path, 0..) |s, k| {
+            const X = s.owner;
+            if (@typeInfo(X) == .@"union") {
+                if (!@hasDecl(X, "json_tag")) list = addCause(list, entryLabel(C, X) ++ ".json_tag");
+                continue;
+            }
+            if (decode_mod.isSkipped(X, C, s.name) != decode_mod.isSkipped(X, Local, s.name)) list = addCause(list, entryLabel(C, X) ++ ".json_skip");
+            if (decode_mod.isFlattened(X, C, s.name) != decode_mod.isFlattened(X, Local, s.name)) list = addCause(list, entryLabel(C, X) ++ ".json_flatten");
+            if (k + 1 == path.len and role == .field and
+                !std.mem.eql(u8, decode_mod.renamedKey(X, C, s.name), decode_mod.renamedKey(X, Local, s.name)))
+            {
+                list = addCause(list, entryLabel(C, X) ++ ".json_rename");
+            }
+        }
+        if (role == .tag and tagByCodec(C, at)) list = addCause(list, entryLabel(C, at) ++ ".json_tag");
+        if (role == .payload and payloadByCodec(C, at)) list = addCause(list, entryLabel(C, at) ++ ".json_payload");
+        var out: []const u8 = "";
+        for (list) |cause| out = join(out, cause, ", ");
+        return out;
+    }
+}
+
+fn addCause(comptime list: []const []const u8, comptime cause: []const u8) []const []const u8 {
+    for (list) |c| {
+        if (std.mem.eql(u8, c, cause)) return list;
+    }
+    return list ++ &[_][]const u8{cause};
+}
+
+/// `label` for the entry `C` holds for `T`, which must exist.
+fn entryLabel(comptime C: type, comptime T: type) []const u8 {
+    comptime {
+        for (C.annotations, 0..) |entry, i| {
+            if (@TypeOf(entry) == Annotations(T)) return label(i, T);
+        }
+        unreachable;
+    }
+}
+
+fn join(comptime a: []const u8, comptime b: []const u8, comptime sep: []const u8) []const u8 {
+    if (a.len == 0) return b;
+    if (b.len == 0) return a;
+    return a ++ sep ++ b;
+}
+
+/// Whether `U`'s effective `json_tag` differs from its own declaration.
+fn tagByCodec(comptime C: type, comptime U: type) bool {
+    const tag = entryOf(C, U).json_tag orelse return false;
+    return !@hasDecl(U, "json_tag") or !std.mem.eql(u8, tag, U.json_tag);
+}
+
+/// Whether `U`'s effective `json_payload` differs from its own declaration.
+fn payloadByCodec(comptime C: type, comptime U: type) bool {
+    const payload = entryOf(C, U).json_payload orelse return false;
+    const local = decode_mod.getJsonPayload(U, Local) orelse return true;
+    return !std.mem.eql(u8, payload, local);
+}
+
+/// The effective `json_tag` and `json_payload` of union `U` must differ.
+fn checkTagPayload(comptime C: type, comptime U: type) void {
+    comptime {
+        const payload = decode_mod.getJsonPayload(U, C) orelse return;
+        const tag = decode_mod.getJsonTag(U, C);
+        if (!std.mem.eql(u8, tag, payload)) return;
+        const where = if (tagByCodec(C, U))
+            entryLabel(C, U) ++ ".json_tag"
+        else if (payloadByCodec(C, U))
+            entryLabel(C, U) ++ ".json_payload"
+        else
+            @typeName(U) ++ ".json_payload";
+        @compileError(where ++ ": json_tag and json_payload of " ++ @typeName(U) ++ " are both `" ++ tag ++
+            "`; the discriminator and the payload need different members");
+    }
+}
+
 /// Comptime branch budget for work that grows with the square of `n`, so a
-/// large type never hits the default limit.
-fn quadraticQuota(comptime n: usize) comptime_int {
-    return 10_000 + 100 * n * n;
+/// large type never hits the default limit. Capped at the largest quota
+/// `@setEvalBranchQuota` accepts.
+fn quadraticQuota(comptime n: comptime_int) comptime_int {
+    return @min(10_000 + 100 * n * n, std.math.maxInt(u32));
 }
 
 /// Sizes of `T` that set branch quotas, each computed once per type.
@@ -249,6 +674,19 @@ fn Budget(comptime T: type) type {
                         else => {},
                     }
                 }
+                break :count n;
+            },
+            else => 0,
+        };
+
+        /// At least the size of any layout of `T`: fields and variants of
+        /// `T` and of every struct or union under them, optionals unwrapped.
+        const tree: usize = count: switch (@typeInfo(T)) {
+            inline .@"struct", .@"union" => |info| {
+                if (T == Value) break :count 0;
+                @setEvalBranchQuota(1000 + 10 * info.fields.len);
+                var n: usize = 2 * info.fields.len + 2;
+                for (info.fields) |f| n +|= Budget(Unwrapped(f.type)).tree;
                 break :count n;
             },
             else => 0,
@@ -867,6 +1305,203 @@ test "codec: hook signatures accept a bare return type, a narrower error set, an
     const a = ar.allocator();
     try std.testing.expectEqualStrings("3", try encodeAlloc(C, a, P{ .n = 3 }, .{}));
     try std.testing.expectEqual(P{ .n = 7 }, try C.parseInto(P, a, "0", .{}));
+}
+
+test "codec: json_skip without a default encodes, and a codec fromJson decodes it" {
+    const Foreign = struct { name: []const u8, internal: u32 };
+    const Skipping = Codec(.{Annotations(Foreign){ .json_skip = &.{"internal"} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v: Foreign = .{ .name = "x", .internal = 3 };
+    try std.testing.expectEqualStrings("{\"name\":\"x\"}", try encodeAlloc(Skipping, a, v, .{}));
+
+    const Decoding = Codec(.{Annotations(Foreign){ .json_skip = &.{"internal"}, .hooks = struct {
+        pub fn fromJson(arena: Allocator, value: Value, options: ParseOptions) DecodeError!Foreign {
+            const Wire = struct { name: []const u8 };
+            const wire = try decode_mod.decode(Wire, Codec(.{}), arena, value, options);
+            return .{ .name = wire.name, .internal = 0 };
+        }
+    } }});
+    try std.testing.expectEqualStrings("{\"name\":\"x\"}", try encodeAlloc(Decoding, a, v, .{}));
+    const back = try Decoding.parseInto(Foreign, a, "{\"name\":\"x\"}", .{});
+    try std.testing.expectEqualStrings("x", back.name);
+    try std.testing.expectEqual(@as(u32, 0), back.internal);
+}
+
+test "codec: key collisions from declarations alone keep their behavior under a codec" {
+    const Inner = struct { a: u8 };
+    const T = struct {
+        pub const json_rename = .{ .x = "k", .y = "k" };
+        pub const json_flatten = .{"inner"};
+        x: u8,
+        y: u8,
+        a: u8,
+        inner: Inner,
+    };
+    const Other = struct { z: u8 };
+    const C = Codec(.{Annotations(Other){ .json_rename = &.{} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const got = try C.parseInto(T, a, "{\"k\":1,\"a\":2}", .{});
+    try std.testing.expectEqual(T{ .x = 1, .y = 1, .a = 2, .inner = .{ .a = 2 } }, got);
+    const global = try decode_mod.parseInto(T, Codec(.{}), a, "{\"k\":1,\"a\":2}", .{});
+    try std.testing.expectEqual(got, global);
+}
+
+test "codec: key collisions from declarations alone stay allowed beside the type's other codec values" {
+    const T = struct {
+        pub const json_rename = .{ .x = "k", .y = "k" };
+        x: u8,
+        y: u8,
+        z: u8 = 0,
+    };
+    const C = Codec(.{Annotations(T){ .json_skip = &.{"z"} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const got = try C.parseInto(T, ar.allocator(), "{\"k\":1}", .{});
+    try std.testing.expectEqual(T{ .x = 1, .y = 1, .z = 0 }, got);
+}
+
+test "codec: variants sharing a declared wire name keep first-match decoding" {
+    const U = union(enum) {
+        pub const json_tag = "t";
+        pub const json_rename = .{ .a = "x", .b = "x" };
+        a: void,
+        b: void,
+    };
+    const C = Codec(.{Annotations(U){ .json_tag = "kind" }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    try std.testing.expectEqual(U.a, try C.parseInto(U, ar.allocator(), "{\"kind\":\"x\"}", .{}));
+}
+
+test "codec: an entry restating a hooked struct's declared json_flatten decodes as the declarations do" {
+    const H = struct {
+        x: u8,
+
+        pub fn fromJson(_: Allocator, value: Value, _: ParseOptions) DecodeError!@This() {
+            return .{ .x = @intCast(value.object.count()) };
+        }
+    };
+    const T = struct {
+        pub const json_flatten = .{"h"};
+        a: u8,
+        h: H,
+    };
+    const C = Codec(.{Annotations(T){ .json_flatten = &.{"h"} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const got = try C.parseInto(T, a, "{\"a\":1}", .{});
+    try std.testing.expectEqual(T{ .a = 1, .h = .{ .x = 1 } }, got);
+    try std.testing.expectEqual(got, try decode_mod.parseInto(T, Codec(.{}), a, "{\"a\":1}", .{}));
+}
+
+test "codec: a codec flatten bringing in a declared collision keeps its behavior" {
+    const S = struct {
+        pub const json_rename = .{ .x = "k", .y = "k" };
+        x: u8,
+        y: u8,
+    };
+    const T = struct { a: u8, s: S };
+    const Declared = struct {
+        pub const json_flatten = .{"s"};
+        a: u8,
+        s: S,
+    };
+    const C = Codec(.{Annotations(T){ .json_flatten = &.{"s"} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const got = try C.parseInto(T, a, "{\"a\":1,\"k\":2}", .{});
+    try std.testing.expectEqual(T{ .a = 1, .s = .{ .x = 2, .y = 2 } }, got);
+    const declared = try decode_mod.parseInto(Declared, Codec(.{}), a, "{\"a\":1,\"k\":2}", .{});
+    try std.testing.expectEqual(got.s, declared.s);
+}
+
+test "codec: entries restating declared values keep declared collisions" {
+    const T = struct {
+        pub const json_rename = .{ .a = "k" };
+        a: u8,
+        k: u8,
+    };
+    const V = struct { t: u8 };
+    const U = union(enum) {
+        pub const json_tag = "t";
+        v: V,
+    };
+    const C = Codec(.{
+        Annotations(T){ .json_rename = &.{.{ .zig_name = "a", .json_name = "k" }} },
+        Annotations(U){ .json_tag = "t" },
+    });
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const got = try C.parseInto(T, a, "{\"k\":3}", .{});
+    try std.testing.expectEqual(got, try decode_mod.parseInto(T, Codec(.{}), a, "{\"k\":3}", .{}));
+    try std.testing.expectEqual(T{ .a = 3, .k = 3 }, got);
+    const src = "{\"t\":\"v\"}";
+    const want = decode_mod.parseInto(U, Codec(.{}), a, src, .{});
+    try std.testing.expectError(error.MissingField, want);
+    try std.testing.expectError(error.MissingField, C.parseInto(U, a, src, .{}));
+}
+
+test "codec: an entry dropping one of several members sharing a declared key keeps the rest" {
+    const T = struct {
+        pub const json_rename = .{ .a = "k", .b = "k", .c = "k" };
+        a: u8,
+        b: u8,
+        c: u8 = 0,
+    };
+    const C = Codec(.{Annotations(T){ .json_rename = &.{
+        .{ .zig_name = "a", .json_name = "k" },
+        .{ .zig_name = "b", .json_name = "k" },
+    } }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    try std.testing.expectEqual(T{ .a = 1, .b = 1, .c = 2 }, try C.parseInto(T, ar.allocator(), "{\"k\":1,\"c\":2}", .{}));
+}
+
+test "codec: members of different variants may share a key" {
+    const P = struct { id: u8 };
+    const Q = struct { y: u8 };
+    const U = union(enum) {
+        pub const json_tag = "kind";
+        a: P,
+        b: Q,
+    };
+    const C = Codec(.{Annotations(Q){ .json_rename = &.{.{ .zig_name = "y", .json_name = "id" }} }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    try expectRoundTrip(C, U, a, .{ .a = .{ .id = 3 } }, "{\"kind\":\"a\",\"id\":3}", .{ .a = .{ .id = 3 } });
+    try expectRoundTrip(C, U, a, .{ .b = .{ .y = 4 } }, "{\"kind\":\"b\",\"id\":4}", .{ .b = .{ .y = 4 } });
+}
+
+test "codec: hooks restating a flattened struct's own fromJson decode as the declarations do" {
+    const H = struct {
+        x: u8,
+
+        pub fn fromJson(_: Allocator, value: Value, _: ParseOptions) DecodeError!@This() {
+            return .{ .x = @intCast(value.object.count()) };
+        }
+    };
+    const T = struct {
+        pub const json_flatten = .{"h"};
+        a: u8,
+        h: H,
+    };
+    const C = Codec(.{Annotations(H){ .hooks = struct {
+        pub const fromJson = H.fromJson;
+    } }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const got = try C.parseInto(T, a, "{\"a\":1}", .{});
+    try std.testing.expectEqual(T{ .a = 1, .h = .{ .x = 1 } }, got);
+    try std.testing.expectEqual(got, try decode_mod.parseInto(T, Codec(.{}), a, "{\"a\":1}", .{}));
 }
 
 test "codec: a config with dozens of nested fields compiles with and without codec entries" {

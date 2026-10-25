@@ -169,7 +169,7 @@ pub fn getJsonTag(comptime T: type, comptime TCodec: type) []const u8 {
     comptime {
         if (codec_mod.entryOf(TCodec, T).json_tag) |tag| return tag;
         if (@hasDecl(T, "json_tag")) return T.json_tag;
-        unreachable;
+        @compileError("json: union " ++ @typeName(T) ++ " has no json_tag; declare pub const json_tag or set json_tag in its codec entry");
     }
 }
 
@@ -254,6 +254,18 @@ fn errorSetWithin(comptime E: type, comptime Super: type) bool {
             return false;
         }
         return true;
+    }
+}
+
+fn skipWithoutDefault(comptime T: type, comptime TCodec: type, comptime field_name: []const u8) noreturn {
+    comptime {
+        const msg = "`json_skip` field `" ++ field_name ++ "` on `" ++ @typeName(T) ++ "` has no default: `" ++ @typeName(T) ++
+            "` can be encoded but not decoded; give `" ++ field_name ++ "` a default or a `fromJson` hook";
+        const hooks = codec_mod.entryOf(TCodec, T).hooks;
+        if (hooks != null and @hasDecl(T, "fromJson")) {
+            @compileError(msg ++ " (`Annotations(" ++ @typeName(T) ++ ").hooks` replaces `" ++ @typeName(T) ++ ".fromJson` and declares no fromJson)");
+        }
+        @compileError(msg);
     }
 }
 
@@ -524,6 +536,7 @@ fn decodeOptional(comptime Child: type, comptime TCodec: type, arena: Allocator,
 
 fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.builtin.Type.Struct, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     comptime validateAnnotations(T);
+    comptime codec_mod.checkUse(TCodec, T);
     if (value != .object) {
         if (options.errors) |list| {
             const msg = try std.fmt.allocPrint(arena, "expected object, got {s}", .{@tagName(value)});
@@ -559,8 +572,7 @@ fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.builtin
 
     inline for (s.fields) |field| {
         if (comptime isSkipped(T, TCodec, field.name)) {
-            const dv = comptime field.defaultValue() orelse
-                @compileError("json_skip field `" ++ field.name ++ "` on " ++ @typeName(T) ++ " has no default value");
+            const dv = comptime field.defaultValue() orelse skipWithoutDefault(T, TCodec, field.name);
             @field(out, field.name) = dv;
         } else if (comptime isFlattened(T, TCodec, field.name)) {
             // Decode the inner struct from the SAME parent value (no key lookup).
@@ -608,6 +620,7 @@ fn variantNames(comptime T: type, comptime TCodec: type) []const []const u8 {
 
 fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_field: []const u8, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     comptime validateAnnotations(T);
+    comptime codec_mod.checkUse(TCodec, T);
     if (value != .object) {
         if (options.errors) |list| {
             const msg = try std.fmt.allocPrint(arena, "expected object for {s}, got {s}", .{ @typeName(T), @tagName(value) });
@@ -824,8 +837,7 @@ fn pathPtr(comptime T: type, comptime path: []const []const u8, base: *T) *PathT
 fn assignSkippedDefaults(comptime T: type, comptime TCodec: type, comptime prefix: []const []const u8, comptime Outer: type, out: *Outer) void {
     inline for (@typeInfo(T).@"struct".fields) |f| {
         if (comptime isSkipped(T, TCodec, f.name)) {
-            const dv = comptime f.defaultValue() orelse
-                @compileError("json_skip field `" ++ f.name ++ "` on " ++ @typeName(T) ++ " has no default value");
+            const dv = comptime f.defaultValue() orelse skipWithoutDefault(T, TCodec, f.name);
             pathPtr(Outer, prefix ++ &[_][]const u8{f.name}, out).* = dv;
         } else if (comptime isFlattened(T, TCodec, f.name)) {
             assignSkippedDefaults(f.type, TCodec, prefix ++ &[_][]const u8{f.name}, Outer, out);
@@ -946,6 +958,7 @@ fn streamFixedArray(comptime T: type, comptime TCodec: type, comptime arr: std.b
 
 fn streamStruct(comptime T: type, comptime TCodec: type, p: *parser_mod.Parser, t: RawToken, depth: usize) (parser_mod.Error || DecodeError)!T {
     comptime validateAnnotations(T);
+    comptime codec_mod.checkUse(TCodec, T);
     if (t.kind != .object_begin) return error.TypeMismatch;
     if (depth >= p.depthLimit()) return error.NestingTooDeep;
 

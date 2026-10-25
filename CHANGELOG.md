@@ -26,7 +26,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BREAKING:** a tagged union that already declares
   `pub const json_payload` now encodes and decodes its payload under that
   member; previously the declaration was ignored and the payload was
-  inlined.
+  inlined. Such a union whose `json_payload` equals its `json_tag` now
+  fails to compile.
 
 ## [0.3.0] - 2026-07-21
 
