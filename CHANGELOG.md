@@ -4,6 +4,30 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `TypedCodec` and `Annotations(T)`: supply `json_rename` (as
+  `AnnotationRename` pairs), `json_skip`, `json_flatten`, `json_tag`,
+  `json_payload`, and `fromJson` / `toJson` hooks for a type from outside
+  it, for types that cannot carry declarations (built with `@Struct`
+  or `@Union`, or owned by another package). A codec's
+  `parseInto`, `parseIntoReader`, `decode`, and `encode` take an
+  `AnnotationsSource` that chooses whether a codec entry or the type's
+  own declaration takes precedence.
+- `json_payload` on a tagged union puts the active variant's payload
+  under one named member next to the discriminator
+  (`{"kind":"version","value":{...}}`) instead of inlining the payload's
+  fields, so a payload may be any decodable type.
+
+### Changed
+
+- **BREAKING:** a tagged union that already declares
+  `pub const json_payload` now encodes and decodes its payload under that
+  member; previously the declaration was ignored and the payload was
+  inlined.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added
@@ -118,7 +142,8 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sakakibara/json-zig/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/json-zig/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/sakakibara/json-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/json-zig/releases/tag/v0.1.0
