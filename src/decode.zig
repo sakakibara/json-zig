@@ -656,45 +656,47 @@ fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_field
                 return @unionInit(T, variant_name, {});
             }
 
-            const payload_value = if (comptime json_payload) |jp| blk: {
-                // Separate payload field: the payload is decoded directly from
-                // its own JSON value, so PayloadType may be anything decodeInner
-                // supports (scalar, slice, struct, nested union, ...). Any
-                // TypeMismatch decodeInner reports will describe THIS value's
-                // own kind, not the wrapper object's.
-                const p = obj.get(jp) orelse {
+            if (comptime json_payload) |jp| {
+                // The payload decodes from its own member, so PayloadType may
+                // be anything decodeInner supports. Unknown keys are reported
+                // before a missing payload, as a struct reports them before a
+                // missing field.
+                if (!options.ignore_unknown_fields) {
+                    const expected = [_][]const u8{ tag_field, jp };
+                    var it = obj.iterator();
+                    while (it.next()) |entry| {
+                        const key = entry.key_ptr.*;
+                        if (std.mem.eql(u8, key, tag_field) or std.mem.eql(u8, key, jp)) continue;
+                        if (options.errors) |list| {
+                            const suggestion = lev.closestMatch(key, &expected, lev.suggestionThreshold(key.len));
+                            const msg = try std.fmt.allocPrint(arena, "unknown field `{s}`", .{key});
+                            const suggestion_owned: ?[]const u8 = if (suggestion) |s_str| try arena.dupe(u8, s_str) else null;
+                            try appendDiag(list, arena, path, msg, suggestion_owned);
+                        }
+                        return error.UnknownField;
+                    }
+                }
+                const payload_value = obj.get(jp) orelse {
                     if (options.errors) |list| {
                         const msg = try std.fmt.allocPrint(arena, "missing payload field `{s}` for {s}", .{ jp, @typeName(T) });
                         try appendDiag(list, arena, path, msg, null);
                     }
                     return error.MissingField;
                 };
-                if (!options.ignore_unknown_fields) {
-                    var it = obj.iterator();
-                    while (it.next()) |entry| {
-                        const key = entry.key_ptr.*;
-                        if (std.mem.eql(u8, key, tag_field)) continue;
-                        if (std.mem.eql(u8, key, jp)) continue;
-                        if (options.errors) |list| {
-                            const msg = try std.fmt.allocPrint(arena, "unknown field `{s}` for {s}", .{ key, @typeName(T) });
-                            try appendDiag(list, arena, path, msg, null);
-                        }
-                        return error.UnknownField;
-                    }
-                }
-                break :blk p;
-            } else blk: {
-                var filtered: value_mod.ObjectMap = .empty;
-                var it = obj.iterator();
-                while (it.next()) |entry| {
-                    if (std.mem.eql(u8, entry.key_ptr.*, tag_field)) continue;
-                    const key_dup = try arena.dupe(u8, entry.key_ptr.*);
-                    try filtered.put(arena, key_dup, entry.value_ptr.*);
-                }
-                break :blk Value{ .object = filtered };
-            };
+                const prev = try path.pushSegment(arena, jp);
+                defer path.restore(prev);
+                const payload = try decodeInner(PayloadType, TCodec, arena, payload_value, options, path);
+                return @unionInit(T, variant_name, payload);
+            }
 
-            const payload = try decodeInner(PayloadType, TCodec, arena, payload_value, options, path);
+            var filtered: value_mod.ObjectMap = .empty;
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, tag_field)) continue;
+                const key_dup = try arena.dupe(u8, entry.key_ptr.*);
+                try filtered.put(arena, key_dup, entry.value_ptr.*);
+            }
+            const payload = try decodeInner(PayloadType, TCodec, arena, Value{ .object = filtered }, options, path);
             return @unionInit(T, variant_name, payload);
         }
     }
@@ -1503,6 +1505,37 @@ test "decode: tagged union without json_payload accepts any decodable payload" {
     const tree = try parse(a, "{\"kind\":\"maybe\",\"y\":4}", .{});
     const maybe = try decode(U, Codec(.{}), a, tree, .{});
     try testing.expectEqual(@as(u8, 4), maybe.maybe.?.y);
+}
+
+test "decode: json_payload diagnostics: unknown key first with a suggestion, dotted path into the payload" {
+    const U = union(enum) {
+        pub const json_tag = "kind";
+        pub const json_payload = "value";
+        version: struct { major: u8 },
+        none: void,
+    };
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+
+    var errs: std.ArrayList(parser_mod.Diagnostic) = .empty;
+    try testing.expectError(error.UnknownField, parseInto(U, Codec(.{}), a, "{\"kind\":\"version\",\"valeu\":{\"major\":1}}", .{ .errors = &errs }));
+    try testing.expectEqual(@as(usize, 1), errs.items.len);
+    try testing.expectEqualStrings("unknown field `valeu`", errs.items[0].message);
+    try testing.expectEqualStrings("value", errs.items[0].suggestion.?);
+
+    errs = .empty;
+    try testing.expectError(error.MissingField, parseInto(U, Codec(.{}), a, "{\"kind\":\"version\"}", .{ .errors = &errs }));
+    try testing.expectEqualStrings("missing payload field `value` for " ++ @typeName(U), errs.items[0].message);
+
+    errs = .empty;
+    try testing.expectError(error.TypeMismatch, parseInto(U, Codec(.{}), a, "{\"kind\":\"version\",\"value\":{\"major\":\"1\"}}", .{ .errors = &errs }));
+    try testing.expectEqualStrings("expected integer, got string (at value.major)", errs.items[0].message);
+
+    const Outer = struct { u: U };
+    errs = .empty;
+    try testing.expectError(error.TypeMismatch, parseInto(Outer, Codec(.{}), a, "{\"u\":{\"kind\":\"version\",\"value\":[]}}", .{ .errors = &errs }));
+    try testing.expectEqualStrings("expected object, got array (at u.value)", errs.items[0].message);
 }
 
 test "decode: unknown field suggests closest match" {
