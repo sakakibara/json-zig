@@ -611,29 +611,8 @@ fn variantNames(comptime T: type, comptime TCodec: type, comptime codec_priority
     }
 }
 
-/// Comptime: every non-void union payload must be struct-shaped when
-/// `json_payload` is absent (its fields are read directly off the wrapper
-/// object alongside the discriminator). With `json_payload` set, a payload
-/// may be any type `decodeInner` supports, since it decodes from its own
-/// isolated JSON value rather than being flattened into the wrapper.
-fn validateTaggedUnionPayloads(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource) void {
-    comptime {
-        const has_payload_field = getJsonPayload(T, TCodec, codec_priority) != null;
-        if (has_payload_field) return;
-        for (@typeInfo(T).@"union".fields) |f| {
-            if (f.type == void) continue;
-            if (@typeInfo(f.type) != .@"struct") {
-                @compileError("json decode: variant `" ++ f.name ++ "` of " ++ @typeName(T) ++
-                    " has non-struct payload " ++ @typeName(f.type) ++
-                    " but no json_payload is set -- either give the union a json_payload field or make every non-void variant a struct");
-            }
-        }
-    }
-}
-
 fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, comptime tag_field: []const u8, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     comptime validateAnnotations(T);
-    comptime validateTaggedUnionPayloads(T, TCodec, codec_priority);
     if (value != .object) {
         if (options.errors) |list| {
             const msg = try std.fmt.allocPrint(arena, "expected object for {s}, got {s}", .{ @typeName(T), @tagName(value) });
@@ -697,9 +676,6 @@ fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime codec_pri
                 }
                 break :blk p;
             } else blk: {
-                // No json_payload: validateTaggedUnionPayloads already
-                // guarantees PayloadType is a struct, so its fields are read
-                // directly off the wrapper (minus the discriminator).
                 var filtered: value_mod.ObjectMap = .empty;
                 var it = obj.iterator();
                 while (it.next()) |entry| {
@@ -1497,6 +1473,34 @@ test "decode: tagged union void payload " {
     const src = "{\"@kind\":\"None\"}";
     const c = try parseInto(Component, TypedCodec(.{}), .local_only, a, src, .{});
     _ = c;
+}
+
+test "decode: tagged union without json_payload accepts any decodable payload" {
+    const Inner = union(enum) {
+        pub const json_tag = "sub";
+        a: struct { x: u8 },
+        b: void,
+    };
+    const U = union(enum) {
+        pub const json_tag = "kind";
+        raw: Value,
+        nested: Inner,
+        maybe: ?struct { y: u8 },
+    };
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+
+    const raw = try parseInto(U, TypedCodec(.{}), .local_only, a, "{\"kind\":\"raw\",\"p\":1}", .{});
+    try testing.expectEqual(@as(i128, 1), raw.raw.object.get("p").?.integer);
+    try testing.expectEqual(@as(usize, 1), raw.raw.object.count());
+
+    const nested = try parseInto(U, TypedCodec(.{}), .local_only, a, "{\"kind\":\"nested\",\"sub\":\"a\",\"x\":3}", .{});
+    try testing.expectEqual(@as(u8, 3), nested.nested.a.x);
+
+    const tree = try parse(a, "{\"kind\":\"maybe\",\"y\":4}", .{});
+    const maybe = try decode(U, TypedCodec(.{}), .local_only, a, tree, .{});
+    try testing.expectEqual(@as(u8, 4), maybe.maybe.?.y);
 }
 
 test "decode: unknown field suggests closest match" {

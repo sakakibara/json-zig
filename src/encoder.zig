@@ -259,6 +259,7 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime codec
                     try writeTypedMember(w, payload, options, depth + 1, &first);
                     try writeTypedValue(union_field.type, TCodec, codec_priority, @field(value, union_field.name), w, arena, options, depth + 1);
                 } else {
+                    comptime requireInlinePayloadStruct(T, union_field);
                     try writeTypedStructFields(union_field.type, TCodec, codec_priority, @field(value, union_field.name), w, arena, options, depth, &first);
                 }
             }
@@ -266,6 +267,16 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime codec
     }
     if (!first) try newlineIndent(w, options.indent, depth);
     try w.writeByte('}');
+}
+
+/// Without `json_payload` a variant's payload is written as members of the
+/// union's own object, which only a struct has.
+fn requireInlinePayloadStruct(comptime T: type, comptime union_field: std.builtin.Type.UnionField) void {
+    if (@typeInfo(union_field.type) != .@"struct") {
+        @compileError("json encodeTyped: variant `" ++ union_field.name ++ "` of " ++ @typeName(T) ++
+            " has non-struct payload " ++ @typeName(union_field.type) ++
+            ", which cannot be inlined next to the discriminator; give the union a json_payload");
+    }
 }
 
 // Sorted typed object emission
@@ -306,6 +317,7 @@ fn writeTypedTaggedUnionSorted(comptime T: type, comptime TCodec: type, comptime
                     @field(payload, json_payload) = @field(value, union_field.name);
                     try writeTypedValue(Payload, TCodec, codec_priority, payload, w, arena, options, depth + 1);
                 } else {
+                    comptime requireInlinePayloadStruct(T, union_field);
                     try collectTypedMembers(union_field.type, TCodec, codec_priority, @field(value, union_field.name), arena, options, depth + 1, &members);
                 }
             }
