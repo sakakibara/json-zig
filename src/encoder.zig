@@ -308,14 +308,10 @@ fn writeTypedTaggedUnionSorted(comptime T: type, comptime TCodec: type, comptime
 
             if (union_field.type != void) {
                 if (comptime decode_mod.getJsonPayload(T, TCodec, codec_priority)) |json_payload| {
-                    const names = [_][]const u8{json_payload};
-                    const types = [_]type{union_field.type};
-                    const atts = [_]std.builtin.Type.StructField.Attributes{.{}};
-
-                    const Payload = @Struct(.auto, null, &names, &types, &atts);
-                    var payload: Payload = undefined;
-                    @field(payload, json_payload) = @field(value, union_field.name);
-                    try writeTypedValue(Payload, TCodec, codec_priority, payload, w, arena, options, depth + 1);
+                    try members.append(arena, .{
+                        .key = json_payload,
+                        .json = try renderTypedValue(union_field.type, TCodec, codec_priority, @field(value, union_field.name), arena, options, depth + 1),
+                    });
                 } else {
                     comptime requireInlinePayloadStruct(T, union_field);
                     try collectTypedMembers(union_field.type, TCodec, codec_priority, @field(value, union_field.name), arena, options, depth + 1, &members);
@@ -1344,4 +1340,51 @@ test "sort_keys: tagged union discriminator sorts among the payload" {
     try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, http, a, .{ .sort_keys = true });
     // keys addr, kind, port in order (kind is the discriminator).
     try testing.expectEqualStrings("{\"addr\":1,\"kind\":\"http\",\"port\":80}", aw.written());
+}
+
+fn expectPayloadUnionCases(comptime U: type, comptime C: type) !void {
+    const Case = struct { value: U, options: EncodeOptions, expected: []const u8 };
+    const cases = [_]Case{
+        .{ .value = .{ .version = .{ .major = 1, .minor = 0 } }, .options = .{}, .expected = "{\"type\":\"version\",\"data\":{\"major\":1,\"minor\":0}}" },
+        .{ .value = .{ .version = .{ .major = 1, .minor = 0 } }, .options = .{ .sort_keys = true }, .expected = "{\"data\":{\"major\":1,\"minor\":0},\"type\":\"version\"}" },
+        .{ .value = .{ .maybe = null }, .options = .{}, .expected = "{\"type\":\"maybe\",\"data\":null}" },
+        .{ .value = .{ .maybe = null }, .options = .{ .sort_keys = true }, .expected = "{\"data\":null,\"type\":\"maybe\"}" },
+        .{ .value = .{ .maybe = .{ .n = 2 } }, .options = .{ .sort_keys = true }, .expected = "{\"data\":{\"n\":2},\"type\":\"maybe\"}" },
+        .{ .value = .none, .options = .{}, .expected = "{\"type\":\"none\"}" },
+        .{ .value = .none, .options = .{ .sort_keys = true }, .expected = "{\"type\":\"none\"}" },
+        .{ .value = .{ .version = .{ .major = 1, .minor = 0 } }, .options = .{ .indent = 2 }, .expected = "{\n  \"type\": \"version\",\n  \"data\": {\n    \"major\": 1,\n    \"minor\": 0\n  }\n}" },
+        .{ .value = .{ .version = .{ .major = 1, .minor = 0 } }, .options = .{ .indent = 2, .sort_keys = true }, .expected = "{\n  \"data\": {\n    \"major\": 1,\n    \"minor\": 0\n  },\n  \"type\": \"version\"\n}" },
+        .{ .value = .{ .maybe = null }, .options = .{ .indent = 2, .sort_keys = true }, .expected = "{\n  \"data\": null,\n  \"type\": \"maybe\"\n}" },
+    };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    for (cases) |case| {
+        var aw: Io.Writer.Allocating = .init(a);
+        try encodeTyped(C, .codec_then_local, &aw.writer, case.value, a, case.options);
+        try testing.expectEqualStrings(case.expected, aw.written());
+        const back = try parseInto(U, C, .codec_then_local, a, aw.written(), .{});
+        try testing.expectEqualDeep(case.value, back);
+    }
+}
+
+test "sort_keys: json_payload union stays one object with the payload as a member" {
+    const Version = struct { major: u8, minor: u8 };
+    const Maybe = ?struct { n: u8 };
+    const Local = union(enum) {
+        pub const json_tag = "type";
+        pub const json_payload = "data";
+        version: Version,
+        maybe: Maybe,
+        none: void,
+    };
+    try expectPayloadUnionCases(Local, TypedCodec(.{}));
+
+    const Bare = union(enum) {
+        version: Version,
+        maybe: Maybe,
+        none: void,
+    };
+    const entry: codec_mod.Annotations(Bare) = .{ .json_tag = "type", .json_payload = "data" };
+    try expectPayloadUnionCases(Bare, TypedCodec(.{entry}));
 }
