@@ -44,9 +44,14 @@ pub fn Annotations(comptime T: type) type {
         /// Fields excluded from decode and encode.
         json_skip: ?[]const []const u8 = null,
 
-        /// A namespace declaring `fromJson` and/or `toJson` for `T`. When
-        /// set, it replaces both of `T`'s own hooks: a direction it does not
-        /// declare uses built-in reflection, and `struct {}` clears both.
+        /// A namespace declaring `fromJson` and/or `toJson` for struct `T`,
+        /// with the type-local hooks' signatures. When set, it replaces both
+        /// of `T`'s own hooks: a direction it does not declare uses built-in
+        /// reflection, and `struct {}` clears both. Keep one of `T`'s own with
+        /// `pub const fromJson = T.fromJson;`. Hook bodies name `T` explicitly,
+        /// since `@This()` inside the namespace is the namespace. Hooks receive
+        /// no codec: a hook that decodes children through `json.decode` does
+        /// not see this codec's entries for them.
         hooks: ?type = null,
 
         /// Discriminator member of a tagged union.
@@ -124,6 +129,8 @@ pub fn Codec(comptime entries: anytype) type {
                 }
             }
 
+            if (annotation.hooks) |Hooks| checkHooksNamespace(T, Hooks);
+
             if (@typeInfo(T) == .@"union" and
                 annotation.json_tag != null and
                 annotation.json_payload != null and
@@ -200,6 +207,25 @@ pub fn Codec(comptime entries: anytype) type {
         };
 
         @compileError("Type annotation should be exactly an Annotations(T) instance.");
+    }
+}
+
+fn checkHooksNamespace(comptime T: type, comptime Hooks: type) void {
+    comptime {
+        const source = "Annotations(" ++ @typeName(T) ++ ").hooks";
+        if (@typeInfo(T) != .@"struct") {
+            @compileError(source ++ ": hooks apply to structs only, and " ++ @typeName(T) ++ " is not a struct");
+        }
+        if (@typeInfo(Hooks) != .@"struct") {
+            @compileError(source ++ " must be a struct type declaring fromJson and/or toJson, got " ++ @typeName(Hooks));
+        }
+        for (@typeInfo(Hooks).@"struct".decls) |decl| {
+            if (!std.mem.eql(u8, decl.name, "fromJson") and !std.mem.eql(u8, decl.name, "toJson")) {
+                @compileError(source ++ " declares `" ++ decl.name ++ "`; its only pub declarations may be fromJson and toJson");
+            }
+        }
+        if (@hasDecl(Hooks, "fromJson")) decode_mod.checkHook(T, Hooks, .fromJson);
+        if (@hasDecl(Hooks, "toJson")) decode_mod.checkHook(T, Hooks, .toJson);
     }
 }
 
@@ -793,6 +819,54 @@ test "codec: streaming and tree decoding agree under a codec rename" {
             try std.testing.expectError(want_err, streamed);
         }
     }
+}
+
+test "codec: generic hooks work type-local and aliased through a namespace" {
+    const G = struct {
+        n: u8,
+
+        pub fn fromJson(_: anytype, value: Value, _: anytype) DecodeError!@This() {
+            if (value != .integer) return error.TypeMismatch;
+            return .{ .n = @intCast(value.integer) };
+        }
+
+        pub fn toJson(self: anytype, _: Allocator) Allocator.Error!Value {
+            return .{ .integer = self.n };
+        }
+    };
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const v: G = .{ .n = 5 };
+
+    try expectRoundTrip(Codec(.{}), G, a, v, "5", v);
+    const Aliased = Codec(.{Annotations(G){ .hooks = struct {
+        pub const fromJson = G.fromJson;
+        pub const toJson = G.toJson;
+    } }});
+    try expectRoundTrip(Aliased, G, a, v, "5", v);
+}
+
+test "codec: hook signatures accept a bare return type, a narrower error set, and private helpers" {
+    const P = struct { n: u8 };
+    const C = Codec(.{Annotations(P){ .hooks = struct {
+        fn digit(n: u8) u8 {
+            return n % 10;
+        }
+
+        pub fn fromJson(_: Allocator, _: Value, _: ParseOptions) P {
+            return .{ .n = digit(17) };
+        }
+
+        pub fn toJson(self: P, _: Allocator) error{OutOfMemory}!Value {
+            return .{ .integer = self.n };
+        }
+    } }});
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    try std.testing.expectEqualStrings("3", try encodeAlloc(C, a, P{ .n = 3 }, .{}));
+    try std.testing.expectEqual(P{ .n = 7 }, try C.parseInto(P, a, "0", .{}));
 }
 
 test "codec: a config with dozens of nested fields compiles with and without codec entries" {

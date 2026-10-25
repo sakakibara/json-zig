@@ -119,12 +119,7 @@ fn writeTypedValue(comptime T: type, comptime TCodec: type, value: T, w: *Io.Wri
     // Custom toJson hook short-circuit, symmetric with decode's fromJson.
     if (comptime decode_mod.hasToJson(T, TCodec)) {
         const Hooks = decode_mod.HookSource(T, TCodec);
-        comptime {
-            const fn_info = @typeInfo(@TypeOf(Hooks.toJson)).@"fn";
-            if (fn_info.params.len != 2) {
-                @compileError(@typeName(Hooks) ++ ".toJson must take exactly 2 params: (Self, Allocator)");
-            }
-        }
+        comptime decode_mod.checkHook(T, Hooks, .toJson);
         const hooked = Hooks.toJson(value, arena) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
         };

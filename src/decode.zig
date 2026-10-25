@@ -189,6 +189,74 @@ pub fn HookSource(comptime T: type, comptime TCodec: type) type {
     return codec_mod.entryOf(TCodec, T).hooks orelse T;
 }
 
+pub const HookKind = enum { fromJson, toJson };
+
+/// Compile-time check of the `kind` hook that `Hooks` declares for struct
+/// `T`, shared by type-local hooks (`Hooks == T`) and a codec's `hooks`
+/// namespace. Both get the arity check. A codec hook must also take and
+/// return `T` with errors decode and encode propagate, wherever its
+/// signature is concrete; parameters and return types left generic pass,
+/// so aliasing a type's own generic hook works.
+pub fn checkHook(comptime T: type, comptime Hooks: type, comptime kind: HookKind) void {
+    comptime {
+        const from_codec = Hooks != T;
+        const source = if (from_codec)
+            "Annotations(" ++ @typeName(T) ++ ").hooks." ++ @tagName(kind)
+        else
+            @typeName(T) ++ "." ++ @tagName(kind);
+        const F = @TypeOf(@field(Hooks, @tagName(kind)));
+        if (from_codec and @typeInfo(F) != .@"fn") {
+            @compileError(source ++ " must be a function, got " ++ @typeName(F));
+        }
+        const fn_info = @typeInfo(F).@"fn";
+        switch (kind) {
+            .fromJson => if (fn_info.params.len != 3) {
+                @compileError(source ++ " must take exactly 3 params: (Allocator, Value, ParseOptions)");
+            },
+            .toJson => if (fn_info.params.len != 2) {
+                @compileError(source ++ " must take exactly 2 params: (" ++ (if (from_codec) @typeName(T) else "Self") ++ ", Allocator)");
+            },
+        }
+        if (!from_codec) return;
+        switch (kind) {
+            .fromJson => if (fn_info.return_type) |R| {
+                const ok = R == T or (@typeInfo(R) == .error_union and
+                    @typeInfo(R).error_union.payload == T and
+                    errorSetWithin(@typeInfo(R).error_union.error_set, DecodeError));
+                if (!ok) {
+                    @compileError(source ++ " must return " ++ @typeName(T) ++ " or E!" ++ @typeName(T) ++
+                        " with E a subset of json.DecodeError, got " ++ @typeName(R));
+                }
+            },
+            .toJson => {
+                if (fn_info.params[0].type) |P| {
+                    if (P != T) @compileError(source ++ " must take " ++ @typeName(T) ++ " as its first param, got " ++ @typeName(P));
+                }
+                if (fn_info.return_type) |R| {
+                    const ok = @typeInfo(R) == .error_union and
+                        @typeInfo(R).error_union.payload == Value and
+                        errorSetWithin(@typeInfo(R).error_union.error_set, Allocator.Error);
+                    if (!ok) @compileError(source ++ " must return std.mem.Allocator.Error!json.Value, got " ++ @typeName(R));
+                }
+            },
+        }
+    }
+}
+
+fn errorSetWithin(comptime E: type, comptime Super: type) bool {
+    comptime {
+        const errors = @typeInfo(E).error_set orelse return false;
+        const allowed = @typeInfo(Super).error_set.?;
+        outer: for (errors) |e| {
+            for (allowed) |a| {
+                if (std.mem.eql(u8, e.name, a.name)) continue :outer;
+            }
+            return false;
+        }
+        return true;
+    }
+}
+
 /// True when struct `T` decodes through a `fromJson` hook.
 pub fn hasFromJson(comptime T: type, comptime TCodec: type) bool {
     return @typeInfo(T) == .@"struct" and @hasDecl(HookSource(T, TCodec), "fromJson");
@@ -270,12 +338,7 @@ fn decodeInner(comptime T: type, comptime TCodec: type, arena: Allocator, value:
     // Custom fromJson hook short-circuit.
     if (comptime hasFromJson(T, TCodec)) {
         const Hooks = HookSource(T, TCodec);
-        comptime {
-            const fn_info = @typeInfo(@TypeOf(Hooks.fromJson)).@"fn";
-            if (fn_info.params.len != 3) {
-                @compileError(@typeName(Hooks) ++ ".fromJson must take exactly 3 params: (Allocator, Value, ParseOptions)");
-            }
-        }
+        comptime checkHook(T, Hooks, .fromJson);
         return Hooks.fromJson(arena, value, options);
     }
 
