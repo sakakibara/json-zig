@@ -93,7 +93,7 @@ pub fn build(b: *std.Build) void {
     const fuzz_step = b.step("fuzz", "Run the random-input fuzzer (zig build fuzz -- [seed] [iterations])");
     fuzz_step.dependOn(&run_fuzz.step);
 
-    // Runnable examples. `zig build examples` compiles all five;
+    // Runnable examples. `zig build examples` compiles all six;
     // `zig build example-<name>` compiles and runs that one.
     const example_names = [_][]const u8{ "basic", "codec", "typed", "edit", "spans", "stream" };
     const examples_step = b.step("examples", "Build all examples");

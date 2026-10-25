@@ -137,6 +137,29 @@ const Plugin = union(enum) {
 members decode as `HttpConfig`. For variant-name overrides, use
 `json_rename` on the union itself.
 
+To hold the payload under one member instead of inline, add
+`json_payload`:
+
+```zig
+const Event = union(enum) {
+    pub const json_tag = "kind";
+    pub const json_payload = "value";
+
+    version: struct { major: u8, minor: u8 },
+    count: u32,
+    none: void,
+};
+// {"kind":"version","value":{"major":1,"minor":0}}
+// {"kind":"count","value":3}
+// {"kind":"none"}
+```
+
+With `json_payload` a payload may be any decodable type, and a `void`
+variant has no payload member; `json_tag` and `json_payload` must name
+different members. Without it, the payload's members sit next
+to the discriminator, so encoding needs every non-void payload to be a
+struct.
+
 For symmetric encoding of typed values (consulting the same annotations),
 use `json.encodeTyped(w, value, arena, options)`:
 
@@ -149,10 +172,74 @@ the annotated type itself. Bind an anonymous struct literal to the type
 first (`const cfg: Config = .{ .name = "x" };`); an anonymous literal
 has its own type, which carries no declarations.
 
-The discriminator member is emitted first, with the payload's fields
-inline in the same object, so the output decodes back via
-`parseInto(T, ...)`. The plain `json.encode(w, value: Value)` still
-applies for hand-built `Value` trees.
+The discriminator member is emitted first, followed by the payload's
+fields inline in the same object or by its `json_payload` member, so the
+output decodes back via `parseInto(T, ...)`. The plain
+`json.encode(w, value: Value)` still applies for hand-built `Value` trees.
+
+### Annotating types from outside them
+
+Annotations and hooks are declarations, but a type built with `@Struct`
+or `@Union` cannot carry declarations, and a type from another package
+cannot be edited to add them. `json.Codec` supplies them from outside
+instead: it takes a tuple of
+`json.Annotations(T)` values, one per type, and returns `parseInto`,
+`parseIntoReader`, `decode`, and `encodeTyped` with the module's own
+arguments.
+
+```zig
+// Tag, names, and types are generated at comptime, as in examples/codec.zig.
+const Shape = @Union(.auto, Tag, &names, &types, &@splat(.{}));
+const Drawing = struct { title: []const u8, shapes: []const Shape };
+
+const ShapeCodec = json.Codec(.{
+    json.Annotations(Shape){
+        .json_tag = "$type",
+        .json_rename = &.{
+            .{ .zig_name = "circle", .json_name = "Geometry.Circle" },
+            .{ .zig_name = "rect", .json_name = "Geometry.Rect" },
+        },
+    },
+});
+
+const drawing = try ShapeCodec.parseInto(Drawing, arena, src, .{});
+try ShapeCodec.encodeTyped(w, drawing, arena, .{});
+```
+
+Entries annotate structs and tagged unions only. An entry offers
+`json_rename` (as `json.AnnotationRename` pairs), `json_skip`,
+`json_flatten`, `json_tag`, `json_payload`, and `hooks`, and applies to
+its type wherever that type appears: as a field, inside
+optionals, slices, and arrays, or flattened. For each type and property,
+the entry's value wins when it is non-null, otherwise the type's own
+declaration applies, otherwise the default. Lists replace whole, so
+overriding one rename means restating the others, and an empty list
+clears the type's own list; `json_tag` and `json_payload` can be
+overridden but not cleared.
+
+`hooks` names a namespace declaring `fromJson` and/or `toJson` with the
+type-local signatures, written against the annotated type by name
+(`@This()` inside the namespace is the namespace). When set, it replaces
+both of the type's own hooks: a direction it leaves out uses reflection,
+`struct {}` clears both, and `pub const fromJson = T.fromJson;` keeps one.
+Hooks apply to structs only, and receive no codec, so a hook that decodes
+children through `json.decode` does not see the codec's entries for them.
+A struct with hooks keeps its other annotations, which apply where its
+fields are inlined. A flattened struct or inline union payload is encoded
+by reflection, ignoring any `toJson`, while decoding still calls any
+`fromJson`.
+
+`json_skip` on a field without a default, common for a type you cannot
+edit, encodes by omitting the field; decoding that type is a compile error
+unless an effective `fromJson` hook decodes it. Other misuse fails at
+compile time with a message naming the type, the entry, and the property:
+a field or variant that does not exist, or a property that does not apply
+to the type. One rule covers the shape of an object: a codec may not make
+two members that can appear together share a key, two variants share a
+wire name, or let a flattened or inline struct have hooks, unless the
+declarations of the type holding them already do the same. So a value
+restating a declaration changes nothing, and a collision a struct's own
+declarations allow stays allowed when a codec flattens that struct.
 
 ### Editing (lossless document model)
 
@@ -468,11 +555,9 @@ through an edit cycle, and its comment-editing calls
 | `ValueStream.fromReader(gpa, reader, options)` | Record iterator over a JSON array or NDJSON stream. |
 
 #### Codec API
-`Codec(entries)` takes a tuple of `Annotations(T)` values and returns entry
-points that mirror the module's own, for types that cannot carry
-annotation declarations (built with `@Struct` / `@Union`, or from another
-package). For each type and property, a non-null entry value wins over the
-type's own declaration; a null one falls back to it.
+
+`Codec(entries)` returns these, each consulting the codec's entries and
+then the types' own declarations:
 
 | Function | Purpose |
 | --- | --- |
@@ -586,7 +671,7 @@ sessions, periodically emit and re-parse into a fresh arena.
 See `examples/` for runnable samples:
 
 - `basic.zig` - dynamic parse and dotted-path access
-- `codec.zig` - decode into Zig struct using external annotations (supports unions)
+- `codec.zig` - annotate a generated union through a codec
 - `typed.zig` - decode straight into a Zig struct
 - `edit.zig` - lossless document edit + emit
 - `spans.zig` - source spans and rich diagnostics

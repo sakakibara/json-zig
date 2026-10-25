@@ -1,11 +1,12 @@
-//! Type annotation utilities for typed encoding and decoding.
+//! Annotations supplied from outside a type.
 //!
-//! Reasoning:
-//! 1. Adding metadata to types from other packages;
-//! 2. Support comptime-generated types from @Struct and @Union, where
-//! embedding annotations by declaring fields is currently impossible /
-//! undesirable behavior;
-//! 3. Allow to overwrite default annotations for specific files when needed.
+//! json-zig reads `json_*` annotations and `fromJson` / `toJson` hooks
+//! from declarations on the type, but a type built with `@Struct` or
+//! `@Union` cannot carry declarations, and a type from another package
+//! cannot be edited to add them. `Codec` takes
+//! `Annotations(T)` entries for such types and offers the module's typed
+//! entry points over them. For each type and property, an entry's non-null
+//! value wins over the type's own declaration, which wins over the default.
 
 const std = @import("std");
 const parser_mod = @import("parser.zig");
@@ -61,35 +62,18 @@ pub fn Annotations(comptime T: type) type {
     };
 }
 
-/// Constructs annotation for typed encoding and decoding.
-// Usage:
-// ```zig
-// fn ComponentUnion(comptime container: []const u8, comptime specs: anytype) type {
-//     var field_names: [specs.len][]const u8 = undefined;
-//     var field_types: [specs.len]type = undefined;
-//     var field_attrs: [specs.len]FieldAttributes = undefined;
-//     ...
-//     const Tag = ComponentEnum(container, specs);
-//     return @Union(.auto, Tag, &field_names, &field_types, &field_attrs);
-// }
-//
-// const _CardDescriptor: json.Annotations(card_descriptor.CardDescriptor) = .{
-//     .json_rename = &.{
-//         .{ .zig_name = "abilities", .json_name = "special_abilities" },
-//         .{ .zig_name = "tags", .json_name = "extra_tags" },
-//     },
-//     .json_skip = &[_][]const u8{ ... },
-// };
-// const _Component: json.Annotations(Component) = .{ .json_tag = "$type" };
-// const _EffectEntityComponent: json.Annotations(EffectEntityComponent) = .{ .json_tag = "$type" };
-// const _Query: json.Annotations(Query) = .{
-//     .json_tag = "$type",
-//     .json_rename = &.{
-//         .{ .zig_name = "AlwaysMatches", .json_name = "AlwaysMatchesQuery" },
-//     },
-// };
-// pub const ComponentUnionRegistry = json.Codec(.{ _CardDescriptor, _Component, ..., _Query });
-// ```
+/// Typed decode and encode entry points that consult `entries`, a tuple
+/// of `Annotations(T)` values with at most one per type:
+///
+/// ```zig
+/// const ShapeCodec = json.Codec(.{
+///     json.Annotations(Shape){ .json_tag = "$type" },
+/// });
+/// const drawing = try ShapeCodec.parseInto(Drawing, arena, src, .{});
+/// ```
+///
+/// Misused entries fail at compile time, when the codec is built or when a
+/// type is first decoded or encoded through it.
 pub fn Codec(comptime entries: anytype) type {
     comptime {
         for (0..entries.len) |i| checkEntry(entries, i);
