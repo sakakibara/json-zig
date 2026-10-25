@@ -175,7 +175,7 @@ has its own type, which carries no declarations.
 The discriminator member is emitted first, followed by the payload's
 fields inline in the same object or by its `json_payload` member, so the
 output decodes back via `parseInto(T, ...)`. The plain
-`json.encode(w, value: Value)` still applies for hand-built `Value` trees.
+`json.encode(w, value, options)` still applies for hand-built `Value` trees.
 
 ### Annotating types from outside them
 
@@ -502,9 +502,9 @@ The default dialect is strict RFC 8259 JSON. Pass
 - trailing commas in arrays and objects
 
 JSONC is a strict superset: every valid JSON document is also valid
-JSONC. The dialect only affects parsing -- `encode`, `encodePretty`, and
-`encodeTyped` always emit plain JSON, regardless of what the tree was
-parsed from. Only the lossless `Document` model preserves JSONC syntax
+JSONC. The dialect only affects parsing -- `encode` and `encodeTyped`
+always emit plain JSON, regardless of what the tree was parsed from.
+Only the lossless `Document` model preserves JSONC syntax
 through an edit cycle, and its comment-editing calls
 (`addCommentBefore`, `setTrailingComment`) return
 `error.CommentsNotSupported` on strict-JSON documents.
@@ -542,8 +542,7 @@ through an edit cycle, and its comment-editing calls
 | `parseInto(T, arena, src, options)` | Decode straight into an instance of `T`. |
 | `parseIntoReader(T, arena, reader, options)` | Reader-input variant of `parseInto`. |
 | `decode(T, arena, value, options)` | Decode an existing `Value` into `T`. |
-| `encode(w, value)` | Emit compact JSON to a `*std.Io.Writer`. |
-| `encodePretty(w, value, options)` | Emit indented JSON. |
+| `encode(w, value, options)` | Emit a `Value` tree as JSON to a `*std.Io.Writer`; `options` sets indentation and key order. |
 | `encodeTyped(w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
 | `Document.parse(arena, src, options)` | Lossless parse for the document model. |
 | `Document.empty(arena, options)` | Bootstrap a document with no source bytes. |
@@ -569,7 +568,7 @@ then the types' own declarations:
 ### Types
 
 `Value`, `ObjectMap`, `Span`, `Spans`, `Diagnostic`, `ParseOptions`,
-`Dialect`, `NumberMode`, `PrettyOptions`, `Error`, `ReaderError`, `DecodeError`,
+`Dialect`, `NumberMode`, `EncodeOptions`, `Error`, `ReaderError`, `DecodeError`,
 `EncodeError`, `DocumentError`, `Document`, `Token`, `TokenKind`,
 `EventReader`, `Event`, `StreamOptions`, `StreamError`, `ValueStream`,
 `StreamShape`, `AnnotationRename`, `Annotations(T)`, `Codec(entries)`.
