@@ -22,36 +22,36 @@ const DecodeError = decode_mod.DecodeError;
 const EncodeError = encoder_mod.EncodeError;
 const Value = v.Value;
 
-/// JSON name override.
-/// Reasoning: variable-length tuples are not present in Zig,
-/// therefore, this is used with comptime-generated and external types.
+/// One `json_rename` pair: the Zig field or variant name and the JSON key
+/// it maps to, the same direction as a type-local
+/// `.{ .zig_field = "json-name" }`.
 pub const AnnotationRename = struct {
-    json_name: []const u8,
     zig_name: []const u8,
+    json_name: []const u8,
 };
 
-/// Type's external annotation record.
-/// Provides JSON parsing hooks for typed decoding and encoding.
+/// Annotations for `T` supplied from outside it, for types that cannot
+/// carry declarations. Every field defaults to null, meaning "no override".
 pub fn Annotations(comptime T: type) type {
     return struct {
-        /// Type this annotates.
-        pub const associated_type: type = T;
+        const associated_type: type = T;
 
-        /// Field name overrides.
+        /// Field or variant name overrides.
         json_rename: ?[]const AnnotationRename = null,
-        /// Fields with subfields that will be decoded from the parent object.
+        /// Struct fields whose members are read from and written to the
+        /// parent object.
         json_flatten: ?[]const []const u8 = null,
-        /// Fields excluded from decode/encode.
+        /// Fields excluded from decode and encode.
         json_skip: ?[]const []const u8 = null,
 
-        /// Custom deserialization of `T` struct.
+        /// Custom deserialization of `T`.
         fromJson: ?*const fn (arena: Allocator, value: Value, options: ParseOptions) DecodeError!T = null,
-        /// Custom serialization of `T` struct.
+        /// Custom serialization of `T`.
         toJson: ?*const fn (self: T, arena: Allocator) Allocator.Error!Value = null,
 
-        /// Discriminator member for tagged unions.
+        /// Discriminator member of a tagged union.
         json_tag: ?[]const u8 = null,
-        // Payload / value member for tagged unions.
+        /// Member of a tagged union that holds the active variant's payload.
         json_payload: ?[]const u8 = null,
     };
 }
@@ -83,8 +83,8 @@ pub const AnnotationsSource = enum {
 //
 // const _CardDescriptor: json.Annotations(card_descriptor.CardDescriptor) = .{
 //     .json_rename = &.{
-//         .{ .json_name = "special_abilities", .zig_name = "abilities" },
-//         .{ .json_name = "extra_tags", .zig_name = "tags" },
+//         .{ .zig_name = "abilities", .json_name = "special_abilities" },
+//         .{ .zig_name = "tags", .json_name = "extra_tags" },
 //     },
 //     .json_skip = &[_][]const u8{ ... },
 // };
@@ -93,14 +93,14 @@ pub const AnnotationsSource = enum {
 // const _Query: json.Annotations(Query) = .{
 //     .json_tag = "$type",
 //     .json_rename = &.{
-//         .{ .json_name = "AlwaysMatchesQuery", .zig_name = "AlwaysMatches" },
+//         .{ .zig_name = "AlwaysMatches", .json_name = "AlwaysMatchesQuery" },
 //     },
 // };
 // pub const ComponentUnionRegistry = json.Codec(.{ _CardDescriptor, _Component, ..., _Query });
 // ```
-pub fn TypedCodec(comptime type_options: anytype) type {
+pub fn Codec(comptime entries: anytype) type {
     comptime {
-        for (type_options, 0..) |annotation, i| {
+        for (entries, 0..) |annotation, i| {
             const TOption = @TypeOf(annotation);
             if (!@hasDecl(TOption, "associated_type")) break;
 
@@ -108,7 +108,7 @@ pub fn TypedCodec(comptime type_options: anytype) type {
             if (TOption != Annotations(T)) break;
 
             for (0..i) |j| {
-                const TPrev = @TypeOf(type_options[j]);
+                const TPrev = @TypeOf(entries[j]);
                 if (TPrev.associated_type == T) {
                     @compileError("Duplicate Annotations(T) entry found for " ++ @typeName(T));
                 }
@@ -145,7 +145,7 @@ pub fn TypedCodec(comptime type_options: anytype) type {
                 @compileError("json_tag and json_payload collision - cannot share the field name.");
             }
         } else return struct {
-            const annotations = type_options;
+            const annotations = entries;
             const Self = @This();
 
             /// Decode a parsed `Value` tree into `T` via comptime reflection.
@@ -167,7 +167,7 @@ pub fn TypedCodec(comptime type_options: anytype) type {
                 return decode_mod.decode(T, Self, codec_priority, arena, value, options);
             }
 
-            /// Decode `src` directly into a `T` using hooks from this `TypedCodec`.
+            /// Decode `src` directly into a `T` using this codec's entries.
             /// Types without `Value` fields, `fromJson` hooks, or tagged unions decode in
             /// a single streaming pass with no intermediate `Value` tree; other types
             /// (and calls requesting `options.spans`) parse to a tree first. Both paths
@@ -195,28 +195,11 @@ pub fn TypedCodec(comptime type_options: anytype) type {
             /// the buffers `sort_keys` uses to reorder members.
             ///
             /// Annotations and hooks are read from `Annotations(T)` and `@TypeOf(value)`.
-            pub fn encode(comptime codec_priority: AnnotationsSource, w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
+            pub fn encodeTyped(comptime codec_priority: AnnotationsSource, w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
                 return encoder_mod.encodeTyped(Self, codec_priority, w, value, arena, options);
             }
 
-            /// Determines whether an entry for `T` exists in this `Codec`.
-            pub fn has(comptime T: type) bool {
-                return inline for (annotations) |annotation_entry| {
-                    const TOption = @TypeOf(annotation_entry);
-                    if (TOption.associated_type == T) break true;
-                } else false;
-            }
-
-            /// Retrieves entry for `T` in this `Codec`.
-            pub fn get(comptime T: type) Annotations(T) {
-                inline for (annotations) |annotation_entry| {
-                    const TOption = @TypeOf(annotation_entry);
-                    if (TOption.associated_type == T) return annotation_entry;
-                } else @compileError("Codec lacks entry for " ++ @typeName(T) ++ ".");
-            }
-
-            /// Retrieves entry for `T` in this `Codec`, if exists.
-            pub fn getOrEmpty(comptime T: type) ?Annotations(T) {
+            fn find(comptime T: type) ?Annotations(T) {
                 return inline for (annotations) |annotation_entry| {
                     const TOption = @TypeOf(annotation_entry);
                     if (TOption.associated_type == T) break annotation_entry;
@@ -228,6 +211,11 @@ pub fn TypedCodec(comptime type_options: anytype) type {
     }
 }
 
+/// The entry `C` holds for `T`, or an all-null entry when it has none.
+pub fn entryOf(comptime C: type, comptime T: type) Annotations(T) {
+    return C.find(T) orelse .{};
+}
+
 test "codec: decode struct json_rename" {
     const GrantAbilityEffectDescriptor = struct {
         AbilityType: enum { AttackOverride, Strikethrough },
@@ -236,9 +224,9 @@ test "codec: decode struct json_rename" {
     };
 
     const _GrantAbilityEffectDescriptor: Annotations(GrantAbilityEffectDescriptor) = comptime .{
-        .json_rename = &.{.{ .json_name = "GrantableAbilityType", .zig_name = "AbilityType" }},
+        .json_rename = &.{.{ .zig_name = "AbilityType", .json_name = "GrantableAbilityType" }},
     };
-    const Codec = comptime TypedCodec(.{_GrantAbilityEffectDescriptor});
+    const TestCodec = comptime Codec(.{_GrantAbilityEffectDescriptor});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -251,7 +239,7 @@ test "codec: decode struct json_rename" {
         \\}
     ;
 
-    const c = try Codec.parseInto(GrantAbilityEffectDescriptor, .codec_then_local, ar.allocator(), src, .{});
+    const c = try TestCodec.parseInto(GrantAbilityEffectDescriptor, .codec_then_local, ar.allocator(), src, .{});
     try std.testing.expectEqual(.Strikethrough, c.AbilityType);
     try std.testing.expectEqual(.EndOfTurn, c.Duration);
 }
@@ -266,12 +254,12 @@ test "codec: decode struct json_skip json_flatten" {
         .json_skip = &[_][]const u8{"runtime"},
         .json_flatten = &[_][]const u8{"common"},
     };
-    const Codec = comptime TypedCodec(.{_C});
+    const TestCodec = comptime Codec(.{_C});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
 
-    const c = try Codec.parseInto(C, .local_then_codec, ar.allocator(), "{\"verbose\":true}", .{});
+    const c = try TestCodec.parseInto(C, .local_then_codec, ar.allocator(), "{\"verbose\":true}", .{});
     try std.testing.expectEqual(@as(u32, 7), c.runtime);
     try std.testing.expectEqual(true, c.common.verbose);
 }
@@ -299,12 +287,12 @@ test "codec: decode struct fromJson mirrors decode fromJson hook short-circuits 
             }
         }.fromJson,
     };
-    const Codec = comptime TypedCodec(.{_SemVer});
+    const TestCodec = comptime Codec(.{_SemVer});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
     const C = struct { v: SemVer };
-    const c = try Codec.parseInto(C, .codec_then_local, ar.allocator(), "{\"v\":\"1.2.3\"}", .{});
+    const c = try TestCodec.parseInto(C, .codec_then_local, ar.allocator(), "{\"v\":\"1.2.3\"}", .{});
     try std.testing.expectEqual(@as(u32, 1), c.v.major);
     try std.testing.expectEqual(@as(u32, 2), c.v.minor);
     try std.testing.expectEqual(@as(u32, 3), c.v.patch);
@@ -360,7 +348,7 @@ test "codec: decode union json_tag json_payload json_rename" {
         },
     };
 
-    const Codec = TypedCodec(.{_Component});
+    const TestCodec = Codec(.{_Component});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -383,7 +371,7 @@ test "codec: decode union json_tag json_payload json_rename" {
         \\}
     ;
 
-    const c = try Codec.parseInto(Component, .codec_then_local, ar.allocator(), src, .{});
+    const c = try TestCodec.parseInto(Component, .codec_then_local, ar.allocator(), src, .{});
     try std.testing.expectEqual(true, c.AttackOverride.Counters.IsPersistent);
     try std.testing.expectEqual(@as(i8, -1), c.AttackOverride.Counters.Counters[0].SourceId);
     try std.testing.expectEqual(@as(u8, 2), c.AttackOverride.Counters.Counters[0].Value);
@@ -392,11 +380,11 @@ test "codec: decode union json_tag json_payload json_rename" {
 test "codec: streaming equivalence mirrors streaming equivalence: duplicate key with invalid first occurrence decodes last-wins" {
     const T = struct { a: u32, b: void = {} };
     const _T: Annotations(T) = .{ .json_skip = &[_][]const u8{"b"} };
-    const Codec = TypedCodec(.{_T});
+    const TestCodec = Codec(.{_T});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
-    const V = try Codec.parseInto(T, .local_then_codec, ar.allocator(), "{\"a\":\"not an int\",\"a\":7}", .{});
+    const V = try TestCodec.parseInto(T, .local_then_codec, ar.allocator(), "{\"a\":\"not an int\",\"a\":7}", .{});
     try std.testing.expectEqual(@as(u32, 7), V.a);
 }
 
@@ -414,7 +402,7 @@ test "codec: encode struct toJson hook mirrors encodeTyped toJson hook overrides
             }
         }.toJson,
     };
-    const Codec = comptime TypedCodec(.{_SemVer});
+    const TestCodec = comptime Codec(.{_SemVer});
 
     const C = struct { v: SemVer };
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -423,14 +411,14 @@ test "codec: encode struct toJson hook mirrors encodeTyped toJson hook overrides
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .v = .{ .major = 1, .minor = 2, .patch = 3 } };
-    try Codec.encode(.codec_then_local, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.codec_then_local, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("{\"v\":\"1.2.3\"}", aw.written());
 }
 
 test "codec: encode sorted mirrors sort_keys: typed struct fields in key order, default keeps declaration" {
     const C = struct { zebra: u8, apple: u8, mango: u8 };
     const _C: Annotations(C) = comptime .{ .json_rename = &.{.{ .zig_name = "zebra", .json_name = "zucchini" }} };
-    const Codec = comptime TypedCodec(.{_C});
+    const TestCodec = comptime Codec(.{_C});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -438,11 +426,11 @@ test "codec: encode sorted mirrors sort_keys: typed struct fields in key order, 
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .zebra = 1, .apple = 2, .mango = 3 };
-    try Codec.encode(.local_then_codec, &aw.writer, c, a, .{ .sort_keys = true });
+    try TestCodec.encodeTyped(.local_then_codec, &aw.writer, c, a, .{ .sort_keys = true });
     try std.testing.expectEqualStrings("{\"apple\":2,\"mango\":3,\"zucchini\":1}", aw.written());
 
     aw.clearRetainingCapacity();
-    try Codec.encode(.local_then_codec, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.local_then_codec, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("{\"zucchini\":1,\"apple\":2,\"mango\":3}", aw.written());
 }
 
@@ -465,7 +453,7 @@ test "codec: codec overrides local" {
             }
         }.toJson,
     };
-    const Codec = TypedCodec(.{_Euclidean});
+    const TestCodec = Codec(.{_Euclidean});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -473,7 +461,7 @@ test "codec: codec overrides local" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: Euclidean = .{ .quotient = 5, .remainder = 3 };
-    try Codec.encode(.codec_then_local, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.codec_then_local, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("503", aw.written());
 }
 
@@ -488,7 +476,7 @@ test "codec: fallback from codec to local" {
         }
     };
     const _Euclidean: Annotations(Euclidean) = comptime .{ .json_rename = &.{.{ .zig_name = "quotient", .json_name = "quot" }} };
-    const Codec = TypedCodec(.{_Euclidean});
+    const TestCodec = Codec(.{_Euclidean});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -496,7 +484,7 @@ test "codec: fallback from codec to local" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: Euclidean = .{ .quotient = 5, .remainder = 3 };
-    try Codec.encode(.codec_then_local, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.codec_then_local, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("53", aw.written());
 }
 
@@ -511,7 +499,7 @@ test "codec: no fallback from codec to local" {
         }
     };
     const _Euclidean: Annotations(Euclidean) = comptime .{ .json_rename = &.{.{ .zig_name = "quotient", .json_name = "quot" }} };
-    const Codec = TypedCodec(.{_Euclidean});
+    const TestCodec = Codec(.{_Euclidean});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -519,7 +507,7 @@ test "codec: no fallback from codec to local" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: Euclidean = .{ .quotient = 5, .remainder = 3 };
-    try Codec.encode(.codec_only, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.codec_only, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("{\"quot\":5,\"remainder\":3}", aw.written());
 }
 
@@ -542,7 +530,7 @@ test "codec: fallback from local to codec" {
             }
         }.toJson,
     };
-    const Codec = TypedCodec(.{_Euclidean});
+    const TestCodec = Codec(.{_Euclidean});
 
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
@@ -550,6 +538,6 @@ test "codec: fallback from local to codec" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: Euclidean = .{ .quotient = 5, .remainder = 3 };
-    try Codec.encode(.local_then_codec, &aw.writer, c, a, .{});
+    try TestCodec.encodeTyped(.local_then_codec, &aw.writer, c, a, .{});
     try std.testing.expectEqualStrings("53", aw.written());
 }

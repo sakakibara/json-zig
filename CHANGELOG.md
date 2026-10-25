@@ -8,12 +8,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `TypedCodec` and `Annotations(T)`: supply `json_rename` (as
+- `Codec` and `Annotations(T)`: supply `json_rename` (as
   `AnnotationRename` pairs), `json_skip`, `json_flatten`, `json_tag`,
   `json_payload`, and `fromJson` / `toJson` hooks for a type from outside
   it, for types that cannot carry declarations (built with `@Struct`
   or `@Union`, or owned by another package). A codec's
-  `parseInto`, `parseIntoReader`, `decode`, and `encode` take an
+  `parseInto`, `parseIntoReader`, `decode`, and `encodeTyped` take an
   `AnnotationsSource` that chooses whether a codec entry or the type's
   own declaration takes precedence.
 - `json_payload` on a tagged union puts the active variant's payload

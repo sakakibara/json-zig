@@ -135,8 +135,7 @@ fn localToJsonCb(comptime T: type) ?ToJsonCb(T) {
 }
 
 fn codecToJsonCb(comptime T: type, comptime TCodec: type) ?ToJsonCb(T) {
-    const annotations = TCodec.getOrEmpty(T) orelse return null;
-    return annotations.toJson;
+    return codec_mod.entryOf(TCodec, T).toJson;
 }
 
 fn writeTypedValue(comptime T: type, comptime TCodec: type, comptime codec_priority: AnnotationsSource, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
@@ -514,7 +513,7 @@ fn writeFloat(w: *Io.Writer, f: f64) EncodeError!void {
 
 const parse = @import("parser.zig").parse;
 const parseInto = decode_mod.parseInto;
-const TypedCodec = codec_mod.TypedCodec;
+const Codec = codec_mod.Codec;
 
 test "encode compact canonical" {
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -941,7 +940,7 @@ test "encodeTyped honors annotations symmetric with decode" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const cfg: C = .{ .listen_addr = "x", .port = 1 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, cfg, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, cfg, a, .{});
     try std.testing.expectEqualStrings("{\"listen-addr\":\"x\",\"port\":1}", aw.written());
 }
 
@@ -953,8 +952,8 @@ test "typed round-trip" {
     const orig: C = .{ .name = "n", .tags = &.{ "a", "b" } };
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, orig, a, .{});
-    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, orig, a, .{});
+    const back = try parseInto(C, Codec(.{}), .local_only, a, aw.written(), .{});
     try std.testing.expectEqualStrings("n", back.name);
     try std.testing.expectEqualStrings("b", back.tags[1]);
 }
@@ -972,7 +971,7 @@ test "encodeTyped: json_flatten inlines inner fields" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const outer: Outer = .{ .name = "foo", .inner = .{ .x = 1, .y = 2 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, outer, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, outer, a, .{});
     try testing.expectEqualStrings("{\"name\":\"foo\",\"x\":1,\"y\":2}", aw.written());
 }
 
@@ -988,12 +987,12 @@ test "encodeTyped: tagged union emits discriminator first" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const http: Plugin = .{ .http = .{ .port = 80 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, http, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, http, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"http\",\"port\":80,\"secure\":false}", aw.written());
 
     aw.clearRetainingCapacity();
     const none: Plugin = .none;
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, none, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, none, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"none\"}", aw.written());
 }
 
@@ -1013,7 +1012,7 @@ test "encodeTyped: tagged union struct payload" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .version = .{ .major = 1, .minor = 0, .patch = 1 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"version\",\"value\":{\"major\":1,\"minor\":0,\"patch\":1}}", aw.written());
 }
 
@@ -1033,7 +1032,7 @@ test "encodeTyped: tagged union scalar payload" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .createdAt = 2 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"createdAt\",\"value\":2}", aw.written());
 }
 
@@ -1053,7 +1052,7 @@ test "encodeTyped: tagged union void payload" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .none = {} };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"kind\":\"none\"}", aw.written());
 }
 
@@ -1074,10 +1073,10 @@ test "encodeTyped: tagged union with decode" {
     defer aw.deinit();
 
     const src = "{\"$type\":\"InLaneAdjacentToLane\",\"$data\":{\"Side\":3}}";
-    const c = try decode_mod.parseInto(Component, TypedCodec(.{}), .local_only, a, src, .{});
+    const c = try decode_mod.parseInto(Component, Codec(.{}), .local_only, a, src, .{});
     try testing.expectEqual(@as(u8, 3), c.InLaneAdjacentToLane.Side);
 
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings(src, aw.written());
 }
 
@@ -1089,7 +1088,7 @@ test "encodeTyped: enum emits tag name string" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .mode = .slow };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"mode\":\"slow\"}", aw.written());
 }
 
@@ -1111,7 +1110,7 @@ test "encodeTyped: toJson hook overrides built-in encoding" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .v = .{ .major = 1, .minor = 2, .patch = 3 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"v\":\"1.2.3\"}", aw.written());
 }
 
@@ -1123,11 +1122,11 @@ test "encodeTyped: null optional omitted, non-null present" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .a = null, .b = 2 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"b\":2}", aw.written());
 
     // The omitted key decodes back to null: lossless round-trip.
-    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
+    const back = try parseInto(C, Codec(.{}), .local_only, a, aw.written(), .{});
     try testing.expectEqual(@as(?u32, null), back.a);
     try testing.expectEqual(@as(?u32, 2), back.b);
 }
@@ -1141,7 +1140,7 @@ test "encodeTyped: embedded Value encodes dynamically" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .meta = meta, .n = 5 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"meta\":{\"a\":[1,2]},\"n\":5}", aw.written());
 }
 
@@ -1153,7 +1152,7 @@ test "encodeTyped: NaN float is unrepresentable" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .x = std.math.nan(f64) };
-    try testing.expectError(error.UnrepresentableFloat, encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{}));
+    try testing.expectError(error.UnrepresentableFloat, encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{}));
 }
 
 test "encodeTyped: fixed array encodes as JSON array" {
@@ -1164,7 +1163,7 @@ test "encodeTyped: fixed array encodes as JSON array" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .rgb = .{ 1, 2, 3 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"rgb\":[1,2,3]}", aw.written());
 }
 
@@ -1194,13 +1193,13 @@ test "encodeTyped: full annotation round-trip" {
     };
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, orig, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, orig, a, .{});
     try testing.expectEqualStrings(
         "{\"listen-addr\":\"x\",\"verbose\":true,\"plugin\":{\"kind\":\"http\",\"port\":80}}",
         aw.written(),
     );
 
-    const back = try parseInto(C, TypedCodec(.{}), .local_only, a, aw.written(), .{});
+    const back = try parseInto(C, Codec(.{}), .local_only, a, aw.written(), .{});
     try testing.expectEqualStrings("x", back.listen_addr);
     try testing.expectEqual(@as(u32, 7), back.runtime);
     try testing.expectEqual(true, back.common.verbose);
@@ -1268,7 +1267,7 @@ test "sort_keys: empty object stays {}" {
     try encode(&aw.writer, .{ .object = .empty }, .{ .sort_keys = true });
     try testing.expectEqualStrings("{}", aw.written());
     aw.clearRetainingCapacity();
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, .{}, a, .{ .sort_keys = true });
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, .{}, a, .{ .sort_keys = true });
     try testing.expectEqualStrings("{}", aw.written());
 }
 
@@ -1280,11 +1279,11 @@ test "sort_keys: typed struct fields in key order, default keeps declaration" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .zebra = 1, .apple = 2, .mango = 3 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     try testing.expectEqualStrings("{\"apple\":2,\"mango\":3,\"zebra\":1}", aw.written());
 
     aw.clearRetainingCapacity();
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{});
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"zebra\":1,\"apple\":2,\"mango\":3}", aw.written());
 }
 
@@ -1301,7 +1300,7 @@ test "sort_keys: typed sorts by emitted (renamed) key, recursively" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .zed = 1, .bbb = .{ .yy = 2, .xx = 3 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     // "aaa" (zed renamed) sorts before "bbb"; inner sorts xx before yy.
     try testing.expectEqualStrings("{\"aaa\":1,\"bbb\":{\"xx\":3,\"yy\":2}}", aw.written());
 }
@@ -1320,7 +1319,7 @@ test "sort_keys: flattened fields sort merged into the parent object" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const c: C = .{ .z = 1, .inner = .{ .m = 2, .a = 3 }, .b = 4 };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, c, a, .{ .sort_keys = true });
     // Flattened a,m interleave with z,b under one sort: a,b,m,z.
     try testing.expectEqualStrings("{\"a\":3,\"b\":4,\"m\":2,\"z\":1}", aw.written());
 }
@@ -1337,7 +1336,7 @@ test "sort_keys: tagged union discriminator sorts among the payload" {
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     const http: Plugin = .{ .http = .{ .port = 80, .addr = 1 } };
-    try encodeTyped(TypedCodec(.{}), .local_only, &aw.writer, http, a, .{ .sort_keys = true });
+    try encodeTyped(Codec(.{}), .local_only, &aw.writer, http, a, .{ .sort_keys = true });
     // keys addr, kind, port in order (kind is the discriminator).
     try testing.expectEqualStrings("{\"addr\":1,\"kind\":\"http\",\"port\":80}", aw.written());
 }
@@ -1378,7 +1377,7 @@ test "sort_keys: json_payload union stays one object with the payload as a membe
         maybe: Maybe,
         none: void,
     };
-    try expectPayloadUnionCases(Local, TypedCodec(.{}));
+    try expectPayloadUnionCases(Local, Codec(.{}));
 
     const Bare = union(enum) {
         version: Version,
@@ -1386,5 +1385,5 @@ test "sort_keys: json_payload union stays one object with the payload as a membe
         none: void,
     };
     const entry: codec_mod.Annotations(Bare) = .{ .json_tag = "type", .json_payload = "data" };
-    try expectPayloadUnionCases(Bare, TypedCodec(.{entry}));
+    try expectPayloadUnionCases(Bare, Codec(.{entry}));
 }

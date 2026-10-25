@@ -89,7 +89,7 @@ const Config = struct {
     },
 };
 
-const cfg = try json.parseInto(Config, json.DefaultTypes, arena, src, .{});
+const cfg = try json.parseInto(Config, arena, src, .{});
 ```
 
 Supported types: `bool`, all int/float widths (overflow-checked),
@@ -141,7 +141,7 @@ For symmetric encoding of typed values (consulting the same annotations),
 use `json.encodeTyped(w, value, arena, options)`:
 
 ```zig
-try json.encodeTyped(w, cfg, annotations, arena, options);
+try json.encodeTyped(w, cfg, arena, .{});
 ```
 
 Annotations and hooks are read from `@TypeOf(value)`, so pass a value of
@@ -468,7 +468,7 @@ through an edit cycle, and its comment-editing calls
 | `ValueStream.fromReader(gpa, reader, options)` | Record iterator over a JSON array or NDJSON stream. |
 
 #### Codec API
-API exposes `Codec(T..)` entry points, which mirror base API (unchanged for compatibility reasons)
+API exposes `Codec(entries)` entry points, which mirror base API (unchanged for compatibility reasons)
 and allow users to provide hooks for external and comptime-generated types, which lack support
 for annotation via declarations. All functions internally share logic with base API and accept
 `codec_priority` for explicit control over annotation precedence.
@@ -478,16 +478,16 @@ for annotation via declarations. All functions internally share logic with base 
 | `Codec.parseInto(T, codec_priority, arena, src, options)` | Decode straight into an instance of `T`. |
 | `Codec.parseIntoReader(T, codec_priority, arena, reader, options)` | Reader-input variant of `parseInto`. |
 | `Codec.decode(T, codec_priority, arena, value, options)` | Decode an existing `Value` into `T`. |
-| `Codec.encode(codec_priority, w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
+| `Codec.encodeTyped(codec_priority, w, value, arena, options)` | Encode a typed value, honoring annotations and hooks. |
 
 ### Types
 
 `Value`, `ObjectMap`, `Span`, `Spans`, `Diagnostic`, `ParseOptions`,
 `Dialect`, `NumberMode`, `PrettyOptions`, `Error`, `ReaderError`, `DecodeError`,
 `EncodeError`, `DocumentError`, `Document`, `Token`, `TokenKind`,
-`TypeAnnotationOptions`, `TypeAnnotationProvider`, `EventReader`, `Event`,
-`StreamOptions`, `StreamError`, `ValueStream`, `StreamShape`,
-`AnnotationRename`, `Annotations(T)`, `AnnotationsSource`, `TypedCodec(T..)`.
+`EventReader`, `Event`, `StreamOptions`, `StreamError`, `ValueStream`,
+`StreamShape`, `AnnotationRename`, `Annotations(T)`, `AnnotationsSource`,
+`Codec(entries)`.
 
 Generated reference docs are published at
 **https://sakakibara.github.io/json-zig/**.

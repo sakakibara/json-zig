@@ -128,7 +128,7 @@ pub const CardDescriptor = struct {
     _isSurprise: bool = false,
 };
 
-pub const DescriptorJsonRegistry = json.TypedCodec(.{_CardDescriptor});
+pub const DescriptorJsonRegistry = json.Codec(.{_CardDescriptor});
 const src =
     \\{
     \\      "prefabName":"Pecanolith",
@@ -200,6 +200,6 @@ pub fn main() !void {
     var aw: std.Io.Writer.Allocating = .init(allocator);
     defer aw.deinit();
 
-    try DescriptorJsonRegistry.encode(.codec_then_local, &aw.writer, card, allocator, .{ .indent = 2, .sort_keys = false });
+    try DescriptorJsonRegistry.encodeTyped(.codec_then_local, &aw.writer, card, allocator, .{ .indent = 2, .sort_keys = false });
     std.debug.print("{s}", .{aw.written()});
 }

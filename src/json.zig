@@ -11,6 +11,7 @@
 //! ```
 
 const std = @import("std");
+const codec_mod = @import("codec.zig");
 const decode_mod = @import("decode.zig");
 const document_mod = @import("document.zig");
 const encoder_mod = @import("encoder.zig");
@@ -18,7 +19,6 @@ const parser_mod = @import("parser.zig");
 const stream_mod = @import("stream.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 const value_mod = @import("value.zig");
-const codec_mod = @import("codec.zig");
 
 /// Lossless document model: parse, edit, emit byte-identical when
 /// unmodified. See `src/document.zig`.
@@ -102,14 +102,15 @@ pub const Spans = value_mod.Spans;
 /// failure path.
 pub const ReaderError = parser_mod.ReaderError;
 
-/// JSON field name override.
+/// One `json_rename` pair of an `Annotations(T)` entry. See `src/codec.zig`.
 pub const AnnotationRename = codec_mod.AnnotationRename;
-/// Type's external annotation record. See `src/codec.zig`.
+/// Annotations for a type supplied from outside it. See `src/codec.zig`.
 pub const Annotations = codec_mod.Annotations;
-/// Precedence rules for annotations.
+/// Precedence between a codec entry and the type's own annotations.
 pub const AnnotationsSource = codec_mod.AnnotationsSource;
-/// Annotations container. See `src/codec.zig`.
-pub const TypedCodec = codec_mod.TypedCodec;
+/// Typed decode and encode entry points that consult `Annotations(T)`
+/// entries. See `src/codec.zig`.
+pub const Codec = codec_mod.Codec;
 
 /// Parse a JSON (or JSONC) document from a byte slice. All allocations
 /// land in `arena`; free the tree with `arena.deinit()`. Strings may be
@@ -150,7 +151,7 @@ pub const DecodeError = decode_mod.DecodeError;
 /// target. JSON `null` decodes only into optional targets; anywhere else
 /// it errors like an absent field. See `src/decode.zig`.
 pub fn decode(comptime T: type, arena: std.mem.Allocator, value: Value, options: ParseOptions) DecodeError!T {
-    return decode_mod.decode(T, TypedCodec(.{}), .local_only, arena, value, options);
+    return decode_mod.decode(T, Codec(.{}), .local_only, arena, value, options);
 }
 
 /// Decode `src` directly into a `T`. Types without `Value` fields,
@@ -161,13 +162,13 @@ pub fn decode(comptime T: type, arena: std.mem.Allocator, value: Value, options:
 /// zero-copy slices into `src`, so keep `src` alive while the result is
 /// in use.
 pub fn parseInto(comptime T: type, arena: std.mem.Allocator, src: []const u8, options: ParseOptions) (Error || DecodeError)!T {
-    return decode_mod.parseInto(T, TypedCodec(.{}), .local_only, arena, src, options);
+    return decode_mod.parseInto(T, Codec(.{}), .local_only, arena, src, options);
 }
 
 /// Reader-input variant of `parseInto`: drains the reader into arena
 /// memory, then parses and decodes.
 pub fn parseIntoReader(comptime T: type, arena: std.mem.Allocator, reader: *std.Io.Reader, options: ParseOptions) (ReaderError || DecodeError)!T {
-    return decode_mod.parseIntoReader(T, TypedCodec(.{}), .local_only, arena, reader, options);
+    return decode_mod.parseIntoReader(T, Codec(.{}), .local_only, arena, reader, options);
 }
 
 /// Encode failure: writer errors, plus `UnrepresentableFloat` for NaN
@@ -208,7 +209,7 @@ pub fn encode(w: *std.Io.Writer, value: Value, options: EncodeOptions) EncodeErr
 /// anonymous struct literal to the annotated type before passing it
 /// (an anonymous literal's type carries no declarations).
 pub fn encodeTyped(w: *std.Io.Writer, value: anytype, arena: std.mem.Allocator, options: EncodeOptions) EncodeError!void {
-    return encoder_mod.encodeTyped(TypedCodec(.{}), .local_only, w, value, arena, options);
+    return encoder_mod.encodeTyped(Codec(.{}), .local_only, w, value, arena, options);
 }
 
 test "spans recorded per dotted path" {
