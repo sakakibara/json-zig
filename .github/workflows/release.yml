@@ -79,3 +79,5 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
+          # 0.3.x releases from zig-0.16 are never the highest version.
+          make_latest: false
