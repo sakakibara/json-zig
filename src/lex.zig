@@ -61,12 +61,18 @@ pub fn unescape(
             } else {
                 const len = std.unicode.utf8ByteSequenceLength(c) catch return error.InvalidUtf8;
                 if (i + len > content.len) return error.InvalidUtf8;
-                _ = std.unicode.utf8Decode(content[i .. i + len]) catch return error.InvalidUtf8;
+                const seq = content[i .. i + len];
+                _ = switch (len) {
+                    2 => std.unicode.utf8Decode2(seq[0..2].*),
+                    3 => std.unicode.utf8Decode3(seq[0..3].*),
+                    4 => std.unicode.utf8Decode4(seq[0..4].*),
+                    else => unreachable,
+                } catch return error.InvalidUtf8;
                 try out.appendSlice(allocator, content[i .. i + len]);
                 i += len;
             }
         } else {
-            const run_end = std.mem.indexOfScalarPos(u8, content, i, '\\') orelse content.len;
+            const run_end = std.mem.findScalarPos(u8, content, i, '\\') orelse content.len;
             try out.appendSlice(allocator, content[i..run_end]);
             i = run_end;
         }

@@ -870,7 +870,7 @@ test "codec: a hooks toJson replaces built-in encoding" {
     const _SemVer: Annotations(SemVer) = comptime .{
         .hooks = struct {
             pub fn toJson(self: SemVer, arena: std.mem.Allocator) std.mem.Allocator.Error!Value {
-                const s = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
+                const s = try arena.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
                 return .{ .string = s };
             }
         },
@@ -1141,7 +1141,7 @@ test "codec: hooks replace both of the type's hooks, clear them, or keep one exp
         }
 
         pub fn toJson(self: @This(), arena: Allocator) Allocator.Error!Value {
-            return .{ .string = try std.fmt.allocPrint(arena, "{d}.{d}", .{ self.major, self.minor }) };
+            return .{ .string = try arena.print("{d}.{d}", .{ self.major, self.minor }) };
         }
     };
     const AsInt = struct {

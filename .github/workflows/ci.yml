@@ -72,7 +72,7 @@ jobs:
         run: zig build test --summary all
 
       - name: zig build (release)
-        run: zig build -Doptimize=ReleaseFast --summary all
+        run: zig build -Doptimize=fast --summary all
 
       - name: build examples
         run: zig build examples
@@ -111,7 +111,7 @@ jobs:
           restore-keys: |
             zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-
       - name: build for ${{ matrix.target }}
-        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+        run: zig build -Dtarget=${{ matrix.target }} -Doptimize=safe
 
   # Random-input fuzzing (fuzz/main.zig): asserts no-crash, parse/encode
   # round-trip equality, and Document byte-identity on every input. 200k

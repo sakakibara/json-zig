@@ -700,7 +700,7 @@ test "encode multi-byte unicode past the SIMD lane boundary" {
     // 18 plain bytes (incl. multi-byte UTF-8), then an escape at index 18,
     // i.e. past the first 16-byte vector lane.
     const s = "abcdefghijkl\xe3\x81\x82xy\ntail\xe3\x81\x84";
-    comptime std.debug.assert(std.mem.indexOfScalar(u8, s, '\n').? > 16);
+    comptime std.debug.assert(std.mem.findScalar(u8, s, '\n').? > 16);
     var aw: Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try encode(&aw.writer, .{ .string = s }, .{});
@@ -854,7 +854,7 @@ test "encode nesting depth guard" {
 test "encode of a very deep Value yields NestingTooDeep, never overflows the stack" {
     // A 200k-deep hand-built array chain. The guard fires at the ceiling,
     // so writeValue returns before recursing past it -- no SIGSEGV.
-    // (Run under ReleaseSafe to confirm.)
+    // (Run under the safe optimize mode to confirm.)
     var ar = std.heap.ArenaAllocator.init(testing.allocator);
     defer ar.deinit();
     const a = ar.allocator();
@@ -903,7 +903,7 @@ test "encode key with embedded quote via pretty path" {
     try encode(&aw.writer, .{ .object = map }, .{ .indent = 2 });
     const out = aw.written();
     // The key must be escaped as \"a\\\"b\" in the output line.
-    try testing.expect(std.mem.indexOf(u8, out, "\"a\\\"b\"") != null);
+    try testing.expect(std.mem.find(u8, out, "\"a\\\"b\"") != null);
 }
 
 test "encodeTyped honors annotations symmetric with decode" {
@@ -1079,7 +1079,7 @@ test "encodeTyped: toJson hook overrides built-in encoding" {
         patch: u32,
 
         pub fn toJson(self: @This(), arena: std.mem.Allocator) std.mem.Allocator.Error!Value {
-            const s = try std.fmt.allocPrint(arena, "{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
+            const s = try arena.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
             return .{ .string = s };
         }
     };

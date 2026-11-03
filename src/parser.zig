@@ -211,7 +211,7 @@ pub fn parse(arena: Allocator, input: []const u8, options: ParseOptions) Error!V
 /// otherwise the unescaped bytes are arena-allocated. On malformed input
 /// yields `error.JsonParseError` rather than producing wrong bytes.
 pub fn decodeStringContent(arena: Allocator, content: []const u8) error{ OutOfMemory, JsonParseError }![]const u8 {
-    if (std.mem.indexOfScalar(u8, content, '\\') == null) return content;
+    if (std.mem.findScalar(u8, content, '\\') == null) return content;
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(arena);
     // Runs between escapes are copied verbatim: the content is already
@@ -272,7 +272,7 @@ pub const Parser = struct {
         self.error_count += 1;
         self.fail_kind = null;
         if (self.options.errors) |list| {
-            const msg = std.fmt.allocPrint(self.arena, fmt, args) catch return error.OutOfMemory;
+            const msg = self.arena.print(fmt, args) catch return error.OutOfMemory;
             list.append(self.arena, .{ .message = msg, .span = span }) catch return error.OutOfMemory;
         }
         return error.JsonParseError;
@@ -292,7 +292,7 @@ pub const Parser = struct {
     fn failDepth(self: *Parser, span: v.Span) Error {
         self.error_count += 1;
         if (self.options.errors) |list| {
-            const msg = std.fmt.allocPrint(self.arena, "nesting depth exceeds limit ({d})", .{self.depthLimit()}) catch return error.OutOfMemory;
+            const msg = self.arena.print("nesting depth exceeds limit ({d})", .{self.depthLimit()}) catch return error.OutOfMemory;
             list.append(self.arena, .{ .message = msg, .span = span }) catch return error.OutOfMemory;
         }
         return error.NestingTooDeep;
@@ -610,7 +610,7 @@ pub const Parser = struct {
         // Raw mode preserves the verbatim lexeme; the lexer already
         // validated it as a well-formed number, so no parsing is needed.
         if (self.options.number_mode == .raw) return .{ .number_raw = raw };
-        if (std.mem.indexOfAny(u8, raw, ".eE") == null) {
+        if (std.mem.findAny(u8, raw, ".eE") == null) {
             if (parseIntFast(raw)) |n| return .{ .integer = n };
             // >18 digits or the fast path declined: try full i128 parse.
             // Overflow falls through to .float so astronomically large
@@ -638,7 +638,7 @@ pub const Parser = struct {
     pub fn decodeString(self: *Parser, t: RawToken) Error![]const u8 {
         const span = diagSpan(t);
         const body = self.input[t.start + 1 .. t.end - 1];
-        if (std.mem.indexOfScalar(u8, body, '\\') == null) {
+        if (std.mem.findScalar(u8, body, '\\') == null) {
             try self.validateRaw(span, body);
             return body;
         }
@@ -826,7 +826,7 @@ test "raised max_depth never overflows the stack: deep input yields NestingTooDe
     // 200k levels of '[' with max_depth raised to a million. The recursive
     // parser is capped at recursive_depth_ceiling regardless of max_depth,
     // so this returns the error well before any stack frame past the ceiling
-    // is pushed -- it must never SIGSEGV. (Run under ReleaseSafe to confirm.)
+    // is pushed -- it must never SIGSEGV. (Run under the safe optimize mode to confirm.)
     var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer ar.deinit();
     const a = ar.allocator();
@@ -1032,7 +1032,7 @@ test "renderRich renders caret line" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try errs.items[0].renderRich(&aw.writer, src);
-    try std.testing.expect(std.mem.indexOf(u8, aw.written(), "^") != null);
+    try std.testing.expect(std.mem.find(u8, aw.written(), "^") != null);
 }
 
 test "null errors bails on first error" {
@@ -1117,7 +1117,7 @@ test "renderRich clamps the caret at line end on eof error" {
     try errs.items[0].renderRich(&aw.writer, src);
     // The error sits past the last byte; the caret lands one column
     // after the line's end, never beyond.
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "[1,\n  |    ^\n") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "[1,\n  |    ^\n") != null);
 }
 
 test "renderRich reports line 3 with the correct source line" {
@@ -1134,9 +1134,9 @@ test "renderRich reports line 3 with the correct source line" {
     defer aw.deinit();
     try errs.items[0].renderRich(&aw.writer, src);
     const out = aw.written();
-    try testing.expect(std.mem.indexOf(u8, out, "error at 3:8:") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "3 |   \"b\": @\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out, "  |        ^\n") != null);
+    try testing.expect(std.mem.find(u8, out, "error at 3:8:") != null);
+    try testing.expect(std.mem.find(u8, out, "3 |   \"b\": @\n") != null);
+    try testing.expect(std.mem.find(u8, out, "  |        ^\n") != null);
 }
 
 test "renderRich: no suggestion renders no did-you-mean" {
@@ -1150,7 +1150,7 @@ test "renderRich: no suggestion renders no did-you-mean" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try errs.items[0].renderRich(&aw.writer, src);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "did you mean") == null);
+    try testing.expect(std.mem.find(u8, aw.written(), "did you mean") == null);
 }
 
 test "renderRich: suggestion renders as a help line" {
@@ -1165,7 +1165,7 @@ test "renderRich: suggestion renders as a help line" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try d.renderRich(&aw.writer, "{prot}");
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "did you mean `port`?") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "did you mean `port`?") != null);
 }
 
 test "Diagnostic.render one-line rendering" {
@@ -1179,7 +1179,7 @@ test "Diagnostic.render one-line rendering" {
     var aw: std.Io.Writer.Allocating = .init(a);
     defer aw.deinit();
     try errs.items[0].render(&aw.writer, src);
-    try testing.expect(std.mem.indexOf(u8, aw.written(), "error at 1:2:") != null);
+    try testing.expect(std.mem.find(u8, aw.written(), "error at 1:2:") != null);
 }
 
 test "top-level trailing garbage records one diagnostic and stops" {
@@ -1324,7 +1324,7 @@ test "strict trailing comma in nested array: one diagnostic, parse continues" {
     // Exactly one diagnostic: recovery closed the array and "b" parsed
     // cleanly (no second error appears).
     try testing.expectEqual(@as(usize, 1), errs.items.len);
-    try testing.expect(std.mem.indexOf(u8, errs.items[0].message, "trailing comma") != null);
+    try testing.expect(std.mem.find(u8, errs.items[0].message, "trailing comma") != null);
     try testing.expectEqual(@as(u32, 9), errs.items[0].span.lineCol(src).col);
 }
 

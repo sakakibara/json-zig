@@ -310,8 +310,8 @@ pub const Document = struct {
         if (self.dialect != .jsonc) return error.CommentsNotSupported;
         // A newline ends // comment early; */ closes /* */ early -- both inject live JSON.
         // Validate before touching the document so the source stays byte-identical on error.
-        if (std.mem.indexOfAny(u8, text, "\n\r") != null) return error.InvalidComment;
-        if (std.mem.indexOf(u8, text, "*/") != null) return error.InvalidComment;
+        if (std.mem.findAny(u8, text, "\n\r") != null) return error.InvalidComment;
+        if (std.mem.find(u8, text, "*/") != null) return error.InvalidComment;
         const r = (try self.resolve(path)) orelse return error.PathNotFound;
         const anchor: usize = blk: {
             if (r.parent) |p| {
@@ -362,14 +362,14 @@ pub const Document = struct {
             while (q < src.len and src[q] != '\n') q += 1;
             region_end = q;
         } else if (p + 1 < src.len and src[p] == '/' and src[p + 1] == '*') {
-            const close = std.mem.indexOfPos(u8, src, p + 2, "*/") orelse return error.InvalidValue;
+            const close = std.mem.findPos(u8, src, p + 2, "*/") orelse return error.InvalidValue;
             region_end = close + 2;
         }
 
         const t = text orelse return self.applyEdit(insert_start, region_end, "");
         // Same injection guards as addCommentBefore -- validate before any edit.
-        if (std.mem.indexOfAny(u8, t, "\n\r") != null) return error.InvalidComment;
-        if (std.mem.indexOf(u8, t, "*/") != null) return error.InvalidComment;
+        if (std.mem.findAny(u8, t, "\n\r") != null) return error.InvalidComment;
+        if (std.mem.find(u8, t, "*/") != null) return error.InvalidComment;
         const line_clear = blk: {
             var q = region_end;
             while (q < src.len) : (q += 1) {
@@ -523,14 +523,14 @@ pub const Document = struct {
     /// `, ` styles alike. Anything else (single member, or trivia in
     /// the gap that must not be duplicated) falls back to `, `.
     fn memberSeparator(self: *Document, gap: []const u8, last_key_start: usize) Error![]const u8 {
-        if (std.mem.indexOfScalar(u8, gap, '\n') != null) {
+        if (std.mem.findScalar(u8, gap, '\n') != null) {
             var ws_start = last_key_start;
             while (ws_start > 0 and (self.source[ws_start - 1] == ' ' or self.source[ws_start - 1] == '\t')) {
                 ws_start -= 1;
             }
             return std.mem.concat(self.arena, u8, &.{ ",\n", self.source[ws_start..last_key_start] });
         }
-        if (std.mem.indexOfScalar(u8, gap, ',') != null) {
+        if (std.mem.findScalar(u8, gap, ',') != null) {
             const clean = blk: {
                 for (gap) |c| {
                     if (c != ',' and c != ' ' and c != '\t') break :blk false;

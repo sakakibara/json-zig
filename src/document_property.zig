@@ -169,7 +169,7 @@ fn genUniqueKey(a: Allocator, rng: std.Random, used: *std.ArrayList([]const u8))
             adversarial_key_pool[rng.uintLessThan(usize, adversarial_key_pool.len)];
         if (!containsStr(used.items, candidate)) return candidate;
     }
-    return std.fmt.allocPrint(a, "fallback_key_{d}", .{used.items.len});
+    return a.print("fallback_key_{d}", .{used.items.len});
 }
 
 fn genInt(rng: std.Random) i128 {
@@ -266,14 +266,14 @@ fn maybeComment(a: Allocator, rng: std.Random, aw: *Io.Writer.Allocating, commen
         0 => {
             const text = genCommentText(rng);
             try aw.writer.print("/* {s} */", .{text});
-            const token = try std.fmt.allocPrint(a, "/* {s} */", .{text});
+            const token = try a.print("/* {s} */", .{text});
             try comments.append(a, token);
             return token;
         },
         1 => {
             const text = genCommentText(rng);
             try aw.writer.print("\n// {s}\n", .{text});
-            const token = try std.fmt.allocPrint(a, "// {s}\n", .{text});
+            const token = try a.print("// {s}\n", .{text});
             try comments.append(a, token);
             return token;
         },
@@ -292,7 +292,7 @@ fn maybeTrailingComment(a: Allocator, rng: std.Random, aw: *Io.Writer.Allocating
     if (rng.intRangeLessThan(u8, 0, 10) != 0) return null;
     const text = genCommentText(rng);
     try aw.writer.print(" // {s}\n", .{text});
-    const token = try std.fmt.allocPrint(a, "// {s}\n", .{text});
+    const token = try a.print("// {s}\n", .{text});
     try comments.append(a, token);
     return token;
 }
@@ -559,7 +559,7 @@ const Ctx = struct {
 fn countOccurrences(haystack: []const u8, needle: []const u8) usize {
     var count: usize = 0;
     var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, pos, needle)) |i| {
+    while (std.mem.findPos(u8, haystack, pos, needle)) |i| {
         count += 1;
         pos = i + needle.len;
     }

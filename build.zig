@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
     const run_document_property = b.addRunArtifact(document_property_tests);
     test_step.dependOn(&run_document_property.step);
 
-    // Microbenchmarks. Always built ReleaseFast for representative timing.
+    // Microbenchmarks. Always built in the fast optimize mode for representative timing.
     // Fixture files are discovered at run time via the injected absolute
     // path, same pattern as the conformance corpus above.
     const bench_options = b.addOptions();
@@ -63,7 +63,7 @@ pub fn build(b: *std.Build) void {
     const bench_module = b.createModule(.{
         .root_source_file = b.path("bench/main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .imports = &.{.{ .name = "json", .module = json_module }},
     });
     bench_module.addOptions("bench_options", bench_options);
@@ -83,7 +83,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("fuzz/main.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
             .imports = &.{.{ .name = "json", .module = json_module }},
         }),
     });

@@ -591,7 +591,7 @@ cd zig-out/docs && python3 -m http.server 8000
 ```sh
 zig build test           # unit + conformance tests
 zig build fuzz           # random-input fuzzer (zig build fuzz -- [seed] [iterations])
-zig build bench          # microbenchmarks (ReleaseFast)
+zig build bench          # microbenchmarks (fast optimize mode)
 zig build docs           # generate reference docs
 zig build examples       # build all examples
 zig build example-basic  # run a specific example (basic, codec, typed, edit, spans, stream)

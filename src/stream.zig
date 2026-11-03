@@ -521,7 +521,7 @@ pub const EventReader = struct {
     fn compact(self: *EventReader) void {
         if (self.pos == 0) return;
         const keep = self.buf.items.len - self.pos;
-        std.mem.copyForwards(u8, self.buf.items[0..keep], self.buf.items[self.pos..]);
+        @memmove(self.buf.items[0..keep], self.buf.items[self.pos..]);
         self.buf.shrinkRetainingCapacity(keep);
         self.base += self.pos;
         self.pos = 0;
@@ -685,7 +685,7 @@ pub const EventReader = struct {
     // matching the tree parser's typed-mode policy.
     fn numberValue(self: *EventReader, arena: std.mem.Allocator, lexeme: []const u8) StreamError!Value {
         if (self.options.number_mode == .raw) return .{ .number_raw = try arena.dupe(u8, lexeme) };
-        if (std.mem.indexOfAny(u8, lexeme, ".eE") == null) {
+        if (std.mem.findAny(u8, lexeme, ".eE") == null) {
             // The lexer pre-validates number syntax, so a non-float lexeme is
             // guaranteed to be [-][0-9]+. InvalidCharacter is unreachable here;
             // Overflow means the value exceeds i128 and falls through to float.
