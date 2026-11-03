@@ -47,6 +47,28 @@ const json = b.dependency("json", .{
 exe.root_module.addImport("json", json.module("json"));
 ```
 
+## Compatibility
+
+- **Zig:** 0.17 (`minimum_zig_version = 0.17.0`).
+- **Zig 0.16:** 0.3.x, on the `zig-0.16` branch from 0.3.0. It takes
+  non-breaking fixes that port without redesign through 2027-05-03 (through
+  2027-02-03 at the earliest if a branch for a newer Zig opens sooner), and
+  security and data-loss fixes through 2027-11-03. A fix that does not
+  port is listed here. Either date moves earlier only with 90 days' notice
+  in this section.
+- **Pull requests:** against `main`; a fix that applies only to Zig 0.16,
+  against `zig-0.16`.
+- **Pins:**
+
+  | Using Zig | Pin |
+  | --- | --- |
+  | 0.16 | `v0.3.0` (`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`) |
+
+- **Versioning:** semantic versioning. Before 1.0, a minor release (0.y.0)
+  may break and a patch (0.y.z) never does. Breaking changes are marked
+  **BREAKING** in the [CHANGELOG](CHANGELOG.md), and their commits are
+  marked with `!` in the subject.
+
 ## Quickstart
 
 ### Dynamic parse

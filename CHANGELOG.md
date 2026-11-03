@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-03
+
 ### Added
 
 - `Codec` and `Annotations(T)`: supply `json_rename` (as
@@ -26,6 +28,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **BREAKING:** requires Zig 0.17.0 (`minimum_zig_version`). On Zig 0.16,
   stay on 0.3.x:
   `zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`.
+  0.3.x takes fixes on the `zig-0.16` branch; the README's Compatibility
+  section gives the dates.
 - **BREAKING:** a tagged union that already declares
   `pub const json_payload` now encodes and decodes its payload under that
   member; previously the declaration was ignored and the payload was
@@ -146,7 +150,8 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/sakakibara/json-zig/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sakakibara/json-zig/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/json-zig/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/sakakibara/json-zig/compare/v0.1.0...v0.1.1
