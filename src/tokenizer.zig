@@ -408,7 +408,7 @@ test "bare slash is invalid in jsonc too" {
 test "simd vector window finds the closing quote" {
     // After the opening quote, 17 bytes remain, so the first full
     // 16-byte vector window covers the closing quote at offset 3.
-    const src = "\"abc\"" ++ " " ** 12 ++ "1";
+    const src = "\"abc\"" ++ &@as([12]u8, @splat(' ')) ++ "1";
     var t: Tokenizer = .init(src, .json);
     const s = t.next().?;
     try testing.expectEqual(Kind.string, s.kind);
@@ -421,7 +421,7 @@ test "simd vector window finds the closing quote" {
 test "simd vector window finds a backslash first" {
     // After the opening quote, 20 bytes remain; the first vector window
     // stops on the backslash at offset 2, not the escaped quote.
-    const src = "\"ab\\\"cd\"" ++ " " ** 12 ++ "1";
+    const src = "\"ab\\\"cd\"" ++ &@as([12]u8, @splat(' ')) ++ "1";
     var t: Tokenizer = .init(src, .json);
     const s = t.next().?;
     try testing.expectEqual(Kind.string, s.kind);

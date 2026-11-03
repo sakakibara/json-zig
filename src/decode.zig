@@ -92,9 +92,9 @@ pub fn validateAnnotations(comptime T: type) void {
     comptime {
         const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
         if (@hasDecl(T, "json_rename")) {
-            for (@typeInfo(@TypeOf(T.json_rename)).@"struct".fields) |rf| {
-                if (!@hasField(T, rf.name)) {
-                    @compileError("json_rename entry `" ++ rf.name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
+            for (@typeInfo(@TypeOf(T.json_rename)).@"struct".field_names) |name| {
+                if (!@hasField(T, name)) {
+                    @compileError("json_rename entry `" ++ name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
                 }
             }
         }
@@ -210,10 +210,10 @@ pub fn checkHook(comptime T: type, comptime Hooks: type, comptime kind: HookKind
         }
         const fn_info = @typeInfo(F).@"fn";
         switch (kind) {
-            .fromJson => if (fn_info.params.len != 3) {
+            .fromJson => if (fn_info.param_types.len != 3) {
                 @compileError(source ++ " must take exactly 3 params: (Allocator, Value, ParseOptions)");
             },
-            .toJson => if (fn_info.params.len != 2) {
+            .toJson => if (fn_info.param_types.len != 2) {
                 @compileError(source ++ " must take exactly 2 params: (" ++ (if (from_codec) @typeName(T) else "Self") ++ ", Allocator)");
             },
         }
@@ -229,7 +229,7 @@ pub fn checkHook(comptime T: type, comptime Hooks: type, comptime kind: HookKind
                 }
             },
             .toJson => {
-                if (fn_info.params[0].type) |P| {
+                if (fn_info.param_types[0]) |P| {
                     if (P != T) @compileError(source ++ " must take " ++ @typeName(T) ++ " as its first param, got " ++ @typeName(P));
                 }
                 if (fn_info.return_type) |R| {
@@ -245,11 +245,11 @@ pub fn checkHook(comptime T: type, comptime Hooks: type, comptime kind: HookKind
 
 fn errorSetWithin(comptime E: type, comptime Super: type) bool {
     comptime {
-        const errors = @typeInfo(E).error_set orelse return false;
-        const allowed = @typeInfo(Super).error_set.?;
+        const errors = @typeInfo(E).error_set.error_names orelse return false;
+        const allowed = @typeInfo(Super).error_set.error_names.?;
         outer: for (errors) |e| {
             for (allowed) |a| {
-                if (std.mem.eql(u8, e.name, a.name)) continue :outer;
+                if (std.mem.eql(u8, e, a)) continue :outer;
             }
             return false;
         }
@@ -286,13 +286,13 @@ fn expectedKeys(comptime T: type, comptime TCodec: type) []const []const u8 {
     comptime {
         const s = @typeInfo(T).@"struct";
         var keys: []const []const u8 = &.{};
-        for (s.fields) |field| {
-            if (isSkipped(T, TCodec, field.name)) continue;
-            if (isFlattened(T, TCodec, field.name)) {
-                const inner = expectedKeys(field.type, TCodec);
+        for (s.field_names, s.field_types) |name, Field| {
+            if (isSkipped(T, TCodec, name)) continue;
+            if (isFlattened(T, TCodec, name)) {
+                const inner = expectedKeys(Field, TCodec);
                 keys = keys ++ inner;
             } else {
-                keys = keys ++ &[_][]const u8{renamedKey(T, TCodec, field.name)};
+                keys = keys ++ &[_][]const u8{renamedKey(T, TCodec, name)};
             }
         }
         return keys;
@@ -472,9 +472,9 @@ fn decodeFloat(comptime T: type, value: Value, arena: Allocator, options: parser
     };
 }
 
-fn decodePointer(comptime T: type, comptime TCodec: type, comptime p: std.builtin.Type.Pointer, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodePointer(comptime T: type, comptime TCodec: type, comptime p: std.lang.Type.Pointer, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     if (p.size != .slice) @compileError("json decode: only slice pointers supported, got " ++ @typeName(T));
-    if (p.child == u8 and p.is_const) {
+    if (p.child == u8 and p.attrs.@"const") {
         if (value != .string) {
             if (options.errors) |list| {
                 const msg = try std.fmt.allocPrint(arena, "expected string, got {s}", .{@tagName(value)});
@@ -501,7 +501,7 @@ fn decodePointer(comptime T: type, comptime TCodec: type, comptime p: std.builti
     return out;
 }
 
-fn decodeArray(comptime T: type, comptime TCodec: type, comptime a: std.builtin.Type.Array, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodeArray(comptime T: type, comptime TCodec: type, comptime a: std.lang.Type.Array, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     if (value != .array) {
         if (options.errors) |list| {
             const msg = try std.fmt.allocPrint(arena, "expected array, got {s}", .{@tagName(value)});
@@ -534,7 +534,7 @@ fn decodeOptional(comptime Child: type, comptime TCodec: type, arena: Allocator,
     return try decodeInner(Child, TCodec, arena, value, options, path);
 }
 
-fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.builtin.Type.Struct, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.lang.Type.Struct, arena: Allocator, value: Value, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
     comptime validateAnnotations(T);
     comptime codec_mod.checkUse(TCodec, T);
     if (value != .object) {
@@ -570,30 +570,30 @@ fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.builtin
 
     var out: T = undefined;
 
-    inline for (s.fields) |field| {
-        if (comptime isSkipped(T, TCodec, field.name)) {
-            const dv = comptime field.defaultValue() orelse skipWithoutDefault(T, TCodec, field.name);
-            @field(out, field.name) = dv;
-        } else if (comptime isFlattened(T, TCodec, field.name)) {
+    inline for (s.field_names, s.field_types, s.field_attrs) |name, Field, attrs| {
+        if (comptime isSkipped(T, TCodec, name)) {
+            const dv = comptime attrs.defaultValue(Field) orelse skipWithoutDefault(T, TCodec, name);
+            @field(out, name) = dv;
+        } else if (comptime isFlattened(T, TCodec, name)) {
             // Decode the inner struct from the SAME parent value (no key lookup).
             // The parent's expectedKeys already validated all keys, so suppress
             // unknown-field errors in the inner struct to avoid false positives
             // on sibling fields the inner type doesn't know about.
-            const prev = try path.pushSegment(arena, field.name);
+            const prev = try path.pushSegment(arena, name);
             defer path.restore(prev);
             var flat_opts = options;
             flat_opts.ignore_unknown_fields = true;
-            @field(out, field.name) = try decodeInner(field.type, TCodec, arena, value, flat_opts, path);
+            @field(out, name) = try decodeInner(Field, TCodec, arena, value, flat_opts, path);
         } else {
-            const eff_key = comptime renamedKey(T, TCodec, field.name);
+            const eff_key = comptime renamedKey(T, TCodec, name);
             if (obj.get(eff_key)) |fv| {
                 const prev = try path.pushSegment(arena, eff_key);
                 defer path.restore(prev);
-                @field(out, field.name) = try decodeInner(field.type, TCodec, arena, fv, options, path);
-            } else if (field.defaultValue()) |dv| {
-                @field(out, field.name) = dv;
-            } else if (@typeInfo(field.type) == .optional) {
-                @field(out, field.name) = null;
+                @field(out, name) = try decodeInner(Field, TCodec, arena, fv, options, path);
+            } else if (attrs.defaultValue(Field)) |dv| {
+                @field(out, name) = dv;
+            } else if (@typeInfo(Field) == .optional) {
+                @field(out, name) = null;
             } else {
                 if (options.errors) |list| {
                     const msg = try std.fmt.allocPrint(arena, "missing required field `{s}`", .{eff_key});
@@ -611,8 +611,8 @@ fn decodeStruct(comptime T: type, comptime TCodec: type, comptime s: std.builtin
 fn variantNames(comptime T: type, comptime TCodec: type) []const []const u8 {
     comptime {
         var names: []const []const u8 = &.{};
-        for (@typeInfo(T).@"union".fields) |field| {
-            names = names ++ &[_][]const u8{renamedKey(T, TCodec, field.name)};
+        for (@typeInfo(T).@"union".field_names) |name| {
+            names = names ++ &[_][]const u8{renamedKey(T, TCodec, name)};
         }
         return names;
     }
@@ -646,12 +646,10 @@ fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_field
 
     const json_payload = comptime getJsonPayload(T, TCodec);
 
-    inline for (@typeInfo(T).@"union".fields) |union_field| {
-        const variant_name = union_field.name;
+    const u = @typeInfo(T).@"union";
+    inline for (u.field_names, u.field_types) |variant_name, PayloadType| {
         const effective_name = comptime renamedKey(T, TCodec, variant_name);
         if (std.mem.eql(u8, tag_value.string, effective_name)) {
-            const PayloadType = union_field.type;
-
             if (PayloadType == void) {
                 return @unionInit(T, variant_name, {});
             }
@@ -761,17 +759,17 @@ fn needsTreeImpl(comptime T: type, comptime TCodec: type, comptime seen: []const
         return switch (@typeInfo(T)) {
             .@"struct" => |s| blk: {
                 if (hasFromJson(T, TCodec)) break :blk true;
-                for (s.fields) |f| {
-                    if (isFlattened(T, TCodec, f.name) and @typeInfo(f.type) != .@"struct") break :blk true;
+                for (s.field_names, s.field_types) |name, Field| {
+                    if (isFlattened(T, TCodec, name) and @typeInfo(Field) != .@"struct") break :blk true;
                 }
                 if (hasKeyCollisions(T, TCodec)) break :blk true;
-                for (s.fields) |f| {
-                    if (needsTreeImpl(f.type, TCodec, seen2)) break :blk true;
+                for (s.field_types) |Field| {
+                    if (needsTreeImpl(Field, TCodec, seen2)) break :blk true;
                 }
                 break :blk false;
             },
             .@"union" => true,
-            .pointer => |p| p.size == .slice and !(p.child == u8 and p.is_const) and needsTreeImpl(p.child, TCodec, seen2),
+            .pointer => |p| p.size == .slice and !(p.child == u8 and p.attrs.@"const") and needsTreeImpl(p.child, TCodec, seen2),
             .array => |a| needsTreeImpl(a.child, TCodec, seen2),
             .optional => |o| needsTreeImpl(o.child, TCodec, seen2),
             else => false,
@@ -793,13 +791,14 @@ const EffField = struct {
 fn effFieldsOf(comptime T: type, comptime TCodec: type, comptime prefix: []const []const u8) []const EffField {
     comptime {
         var out: []const EffField = &.{};
-        for (@typeInfo(T).@"struct".fields) |f| {
-            if (isSkipped(T, TCodec, f.name)) continue;
-            const p2 = prefix ++ &[_][]const u8{f.name};
-            if (isFlattened(T, TCodec, f.name)) {
-                out = out ++ effFieldsOf(f.type, TCodec, p2);
+        const s = @typeInfo(T).@"struct";
+        for (s.field_names, s.field_types) |name, Field| {
+            if (isSkipped(T, TCodec, name)) continue;
+            const p2 = prefix ++ &[_][]const u8{name};
+            if (isFlattened(T, TCodec, name)) {
+                out = out ++ effFieldsOf(Field, TCodec, p2);
             } else {
-                out = out ++ &[_]EffField{.{ .key = renamedKey(T, TCodec, f.name), .path = p2, .Type = f.type }};
+                out = out ++ &[_]EffField{.{ .key = renamedKey(T, TCodec, name), .path = p2, .Type = Field }};
             }
         }
         return out;
@@ -837,12 +836,13 @@ fn pathPtr(comptime T: type, comptime path: []const []const u8, base: *T) *PathT
 /// Assign defaults to every `json_skip` field of `T`, recursing through
 /// flattened inner structs. Mirrors the skip branch of `decodeStruct`.
 fn assignSkippedDefaults(comptime T: type, comptime TCodec: type, comptime prefix: []const []const u8, comptime Outer: type, out: *Outer) void {
-    inline for (@typeInfo(T).@"struct".fields) |f| {
-        if (comptime isSkipped(T, TCodec, f.name)) {
-            const dv = comptime f.defaultValue() orelse skipWithoutDefault(T, TCodec, f.name);
-            pathPtr(Outer, prefix ++ &[_][]const u8{f.name}, out).* = dv;
-        } else if (comptime isFlattened(T, TCodec, f.name)) {
-            assignSkippedDefaults(f.type, TCodec, prefix ++ &[_][]const u8{f.name}, Outer, out);
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types, s.field_attrs) |name, Field, attrs| {
+        if (comptime isSkipped(T, TCodec, name)) {
+            const dv = comptime attrs.defaultValue(Field) orelse skipWithoutDefault(T, TCodec, name);
+            pathPtr(Outer, prefix ++ &[_][]const u8{name}, out).* = dv;
+        } else if (comptime isFlattened(T, TCodec, name)) {
+            assignSkippedDefaults(Field, TCodec, prefix ++ &[_][]const u8{name}, Outer, out);
         }
     }
 }
@@ -908,9 +908,9 @@ fn streamValue(comptime T: type, comptime TCodec: type, p: *parser_mod.Parser, t
     };
 }
 
-fn streamPointer(comptime T: type, comptime TCodec: type, comptime ptr: std.builtin.Type.Pointer, p: *parser_mod.Parser, t: RawToken, depth: usize) (parser_mod.Error || DecodeError)!T {
+fn streamPointer(comptime T: type, comptime TCodec: type, comptime ptr: std.lang.Type.Pointer, p: *parser_mod.Parser, t: RawToken, depth: usize) (parser_mod.Error || DecodeError)!T {
     if (comptime ptr.size != .slice) @compileError("json decode: only slice pointers supported, got " ++ @typeName(T));
-    if (comptime (ptr.child == u8 and ptr.is_const)) {
+    if (comptime (ptr.child == u8 and ptr.attrs.@"const")) {
         if (t.kind != .string) return error.TypeMismatch;
         return try p.decodeString(t);
     }
@@ -933,7 +933,7 @@ fn streamPointer(comptime T: type, comptime TCodec: type, comptime ptr: std.buil
     return items.toOwnedSlice(p.arena);
 }
 
-fn streamFixedArray(comptime T: type, comptime TCodec: type, comptime arr: std.builtin.Type.Array, p: *parser_mod.Parser, t: RawToken, depth: usize) (parser_mod.Error || DecodeError)!T {
+fn streamFixedArray(comptime T: type, comptime TCodec: type, comptime arr: std.lang.Type.Array, p: *parser_mod.Parser, t: RawToken, depth: usize) (parser_mod.Error || DecodeError)!T {
     if (t.kind != .array_begin) return error.TypeMismatch;
     if (depth >= p.depthLimit()) return error.NestingTooDeep;
     var out: T = undefined;
@@ -965,7 +965,7 @@ fn streamStruct(comptime T: type, comptime TCodec: type, p: *parser_mod.Parser, 
     if (depth >= p.depthLimit()) return error.NestingTooDeep;
 
     const eff = comptime effFieldsOf(T, TCodec, &.{});
-    var seen = [_]bool{false} ** eff.len;
+    var seen: [eff.len]bool = @splat(false);
     var out: T = undefined;
     assignSkippedDefaults(T, TCodec, &.{}, T, &out);
 
@@ -1008,13 +1008,9 @@ fn streamStruct(comptime T: type, comptime TCodec: type, p: *parser_mod.Parser, 
     inline for (eff, 0..) |f, idx| {
         if (!seen[idx]) {
             const Parent = PathType(T, f.path[0 .. f.path.len - 1]);
-            const fi = comptime blk: {
-                for (@typeInfo(Parent).@"struct".fields) |sf| {
-                    if (std.mem.eql(u8, sf.name, f.path[f.path.len - 1])) break :blk sf;
-                }
-                unreachable;
-            };
-            const dv_opt = comptime fi.defaultValue();
+            const ps = @typeInfo(Parent).@"struct";
+            const fi = comptime std.meta.fieldIndex(Parent, f.path[f.path.len - 1]).?;
+            const dv_opt = comptime ps.field_attrs[fi].defaultValue(ps.field_types[fi]);
             if (dv_opt) |dv| {
                 pathPtr(T, f.path, &out).* = dv;
             } else if (comptime @typeInfo(f.Type) == .optional) {

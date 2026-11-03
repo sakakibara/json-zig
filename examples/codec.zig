@@ -31,11 +31,11 @@ const Shape = blk: {
 // The wire names every variant "Geometry.<Name>", generated rather than
 // written out per variant.
 const shape_renames = blk: {
-    const fields = @typeInfo(Shape).@"union".fields;
-    var renames: [fields.len]json.AnnotationRename = undefined;
-    for (fields, 0..) |f, i| {
-        const first = [_]u8{std.ascii.toUpper(f.name[0])};
-        renames[i] = .{ .zig_name = f.name, .json_name = "Geometry." ++ first ++ f.name[1..] };
+    const names = @typeInfo(Shape).@"union".field_names;
+    var renames: [names.len]json.AnnotationRename = undefined;
+    for (names, 0..) |name, i| {
+        const first = [_]u8{std.ascii.toUpper(name[0])};
+        renames[i] = .{ .zig_name = name, .json_name = "Geometry." ++ first ++ name[1..] };
     }
     const final = renames;
     break :blk final;

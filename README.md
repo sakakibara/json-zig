@@ -30,7 +30,8 @@ const cfg = try json.parseInto(Config, arena, src, .{});
 
 ## Install
 
-Requires Zig 0.16.0 or newer.
+Requires Zig 0.17. For Zig 0.16, use 0.3.0
+(`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`).
 
 ```sh
 zig fetch --save git+https://github.com/sakakibara/json-zig

@@ -23,6 +23,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING:** requires Zig 0.17.0 (`minimum_zig_version`). On Zig 0.16,
+  stay on 0.3.x:
+  `zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`.
 - **BREAKING:** a tagged union that already declares
   `pub const json_payload` now encodes and decodes its payload under that
   member; previously the declaration was ignored and the payload was

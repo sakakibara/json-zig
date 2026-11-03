@@ -137,7 +137,7 @@ fn writeTypedValue(comptime T: type, comptime TCodec: type, value: T, w: *Io.Wri
         .float => try writeFloat(w, @floatCast(value)),
         .pointer => |p| {
             if (p.size != .slice) @compileError("json encodeTyped: only slice pointers supported, got " ++ @typeName(T));
-            if (p.child == u8 and p.is_const) return writeQuotedString(w, value);
+            if (p.child == u8 and p.attrs.@"const") return writeQuotedString(w, value);
             try writeTypedArray(p.child, TCodec, value, w, arena, options, depth);
         },
         .array => |a| try writeTypedArray(a.child, TCodec, &value, w, arena, options, depth),
@@ -189,22 +189,23 @@ fn writeTypedArray(comptime Child: type, comptime TCodec: type, items: []const C
 /// object. `first` carries comma state across recursion levels; members
 /// sit at `depth + 1`.
 fn writeTypedStructFields(comptime T: type, comptime TCodec: type, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize, first: *bool) EncodeError!void {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (comptime decode_mod.isSkipped(T, TCodec, field.name)) continue;
-        const fv = @field(value, field.name);
-        if (comptime decode_mod.isFlattened(T, TCodec, field.name)) {
-            comptime decode_mod.validateAnnotations(field.type);
-            try writeTypedStructFields(field.type, TCodec, fv, w, arena, options, depth, first);
-        } else if (comptime @typeInfo(field.type) == .optional) {
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, Field| {
+        if (comptime decode_mod.isSkipped(T, TCodec, name)) continue;
+        const fv = @field(value, name);
+        if (comptime decode_mod.isFlattened(T, TCodec, name)) {
+            comptime decode_mod.validateAnnotations(Field);
+            try writeTypedStructFields(Field, TCodec, fv, w, arena, options, depth, first);
+        } else if (comptime @typeInfo(Field) == .optional) {
             // Null optionals are omitted; decode maps the absent key back
             // to null, so the round-trip is lossless.
             if (fv) |inner| {
-                try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, field.name), options, depth + 1, first);
-                try writeTypedValue(@typeInfo(field.type).optional.child, TCodec, inner, w, arena, options, depth + 1);
+                try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, name), options, depth + 1, first);
+                try writeTypedValue(@typeInfo(Field).optional.child, TCodec, inner, w, arena, options, depth + 1);
             }
         } else {
-            try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, field.name), options, depth + 1, first);
-            try writeTypedValue(field.type, TCodec, fv, w, arena, options, depth + 1);
+            try writeTypedMember(w, comptime decode_mod.renamedKey(T, TCodec, name), options, depth + 1, first);
+            try writeTypedValue(Field, TCodec, fv, w, arena, options, depth + 1);
         }
     }
 }
@@ -225,17 +226,18 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_f
     const active = std.meta.activeTag(value);
     try w.writeByte('{');
     var first = true;
-    inline for (@typeInfo(T).@"union".fields) |union_field| {
-        if (active == @field(std.meta.Tag(T), union_field.name)) {
+    const u = @typeInfo(T).@"union";
+    inline for (u.field_names, u.field_types) |name, Payload| {
+        if (active == @field(std.meta.Tag(T), name)) {
             try writeTypedMember(w, tag_field, options, depth + 1, &first);
-            try writeQuotedString(w, comptime decode_mod.renamedKey(T, TCodec, union_field.name));
-            if (union_field.type != void) {
+            try writeQuotedString(w, comptime decode_mod.renamedKey(T, TCodec, name));
+            if (Payload != void) {
                 if (comptime decode_mod.getJsonPayload(T, TCodec)) |payload| {
                     try writeTypedMember(w, payload, options, depth + 1, &first);
-                    try writeTypedValue(union_field.type, TCodec, @field(value, union_field.name), w, arena, options, depth + 1);
+                    try writeTypedValue(Payload, TCodec, @field(value, name), w, arena, options, depth + 1);
                 } else {
-                    comptime requireInlinePayloadStruct(T, union_field);
-                    try writeTypedStructFields(union_field.type, TCodec, @field(value, union_field.name), w, arena, options, depth, &first);
+                    comptime requireInlinePayloadStruct(T, name, Payload);
+                    try writeTypedStructFields(Payload, TCodec, @field(value, name), w, arena, options, depth, &first);
                 }
             }
         }
@@ -246,10 +248,10 @@ fn writeTypedTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_f
 
 /// Without `json_payload` a variant's payload is written as members of the
 /// union's own object, which only a struct has.
-fn requireInlinePayloadStruct(comptime T: type, comptime union_field: std.builtin.Type.UnionField) void {
-    if (@typeInfo(union_field.type) != .@"struct") {
-        @compileError("json encodeTyped: variant `" ++ union_field.name ++ "` of " ++ @typeName(T) ++
-            " has non-struct payload " ++ @typeName(union_field.type) ++
+fn requireInlinePayloadStruct(comptime T: type, comptime name: [:0]const u8, comptime Payload: type) void {
+    if (@typeInfo(Payload) != .@"struct") {
+        @compileError("json encodeTyped: variant `" ++ name ++ "` of " ++ @typeName(T) ++
+            " has non-struct payload " ++ @typeName(Payload) ++
             ", which cannot be inlined next to the discriminator; give the union a json_payload");
     }
 }
@@ -274,22 +276,23 @@ fn writeTypedObjectSorted(comptime T: type, comptime TCodec: type, value: T, w: 
 fn writeTypedTaggedUnionSorted(comptime T: type, comptime TCodec: type, comptime tag_field: []const u8, value: T, w: *Io.Writer, arena: std.mem.Allocator, options: EncodeOptions, depth: usize) EncodeError!void {
     const active = std.meta.activeTag(value);
     var members: std.ArrayList(TypedMember) = .empty;
-    inline for (@typeInfo(T).@"union".fields) |union_field| {
-        if (active == @field(std.meta.Tag(T), union_field.name)) {
+    const u = @typeInfo(T).@"union";
+    inline for (u.field_names, u.field_types) |name, Payload| {
+        if (active == @field(std.meta.Tag(T), name)) {
             try members.append(arena, .{
                 .key = tag_field,
-                .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, TCodec, union_field.name)),
+                .json = try renderTypedString(arena, comptime decode_mod.renamedKey(T, TCodec, name)),
             });
 
-            if (union_field.type != void) {
+            if (Payload != void) {
                 if (comptime decode_mod.getJsonPayload(T, TCodec)) |json_payload| {
                     try members.append(arena, .{
                         .key = json_payload,
-                        .json = try renderTypedValue(union_field.type, TCodec, @field(value, union_field.name), arena, options, depth + 1),
+                        .json = try renderTypedValue(Payload, TCodec, @field(value, name), arena, options, depth + 1),
                     });
                 } else {
-                    comptime requireInlinePayloadStruct(T, union_field);
-                    try collectTypedMembers(union_field.type, TCodec, @field(value, union_field.name), arena, options, depth + 1, &members);
+                    comptime requireInlinePayloadStruct(T, name, Payload);
+                    try collectTypedMembers(Payload, TCodec, @field(value, name), arena, options, depth + 1, &members);
                 }
             }
         }
@@ -320,23 +323,24 @@ fn emitSortedTypedMembers(w: *Io.Writer, members: []TypedMember, options: Encode
 /// into the parent, skipped fields dropped, null optionals omitted), each
 /// value rendered to JSON at `member_depth`.
 fn collectTypedMembers(comptime T: type, comptime TCodec: type, value: T, arena: std.mem.Allocator, options: EncodeOptions, member_depth: usize, members: *std.ArrayList(TypedMember)) EncodeError!void {
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        if (comptime decode_mod.isSkipped(T, TCodec, field.name)) continue;
-        const fv = @field(value, field.name);
-        if (comptime decode_mod.isFlattened(T, TCodec, field.name)) {
-            comptime decode_mod.validateAnnotations(field.type);
-            try collectTypedMembers(field.type, TCodec, fv, arena, options, member_depth, members);
-        } else if (comptime @typeInfo(field.type) == .optional) {
+    const s = @typeInfo(T).@"struct";
+    inline for (s.field_names, s.field_types) |name, Field| {
+        if (comptime decode_mod.isSkipped(T, TCodec, name)) continue;
+        const fv = @field(value, name);
+        if (comptime decode_mod.isFlattened(T, TCodec, name)) {
+            comptime decode_mod.validateAnnotations(Field);
+            try collectTypedMembers(Field, TCodec, fv, arena, options, member_depth, members);
+        } else if (comptime @typeInfo(Field) == .optional) {
             if (fv) |inner| {
                 try members.append(arena, .{
-                    .key = comptime decode_mod.renamedKey(T, TCodec, field.name),
-                    .json = try renderTypedValue(@typeInfo(field.type).optional.child, TCodec, inner, arena, options, member_depth),
+                    .key = comptime decode_mod.renamedKey(T, TCodec, name),
+                    .json = try renderTypedValue(@typeInfo(Field).optional.child, TCodec, inner, arena, options, member_depth),
                 });
             }
         } else {
             try members.append(arena, .{
-                .key = comptime decode_mod.renamedKey(T, TCodec, field.name),
-                .json = try renderTypedValue(field.type, TCodec, fv, arena, options, member_depth),
+                .key = comptime decode_mod.renamedKey(T, TCodec, name),
+                .json = try renderTypedValue(Field, TCodec, fv, arena, options, member_depth),
             });
         }
     }

@@ -809,10 +809,10 @@ fn valueFromAny(arena: Allocator, comptime T: type, value: T) Error!Value {
         .comptime_float => .{ .float = value },
         .optional => |o| if (value) |inner| try valueFromAny(arena, o.child, inner) else .null,
         .pointer => |p| blk: {
-            if (p.size == .slice and p.child == u8 and p.is_const) {
+            if (p.size == .slice and p.child == u8 and p.attrs.@"const") {
                 break :blk .{ .string = try arena.dupe(u8, value) };
             }
-            if (p.size == .one and p.is_const) {
+            if (p.size == .one and p.attrs.@"const") {
                 const child_info = @typeInfo(p.child);
                 if (child_info == .array and child_info.array.child == u8) {
                     const as_slice: []const u8 = value;

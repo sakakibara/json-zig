@@ -35,7 +35,8 @@ pub const AnnotationRename = struct {
 /// carry declarations. Every field defaults to null, meaning "no override".
 pub fn Annotations(comptime T: type) type {
     return struct {
-        const associated_type: type = T;
+        /// The type these annotations apply to.
+        pub const associated_type: type = T;
 
         /// Field or variant name overrides.
         json_rename: ?[]const AnnotationRename = null,
@@ -244,9 +245,9 @@ fn checkHooksNamespace(comptime T: type, comptime Hooks: type) void {
         if (@typeInfo(Hooks) != .@"struct") {
             @compileError(source ++ " must be a struct type declaring fromJson and/or toJson, got " ++ @typeName(Hooks));
         }
-        for (@typeInfo(Hooks).@"struct".decls) |decl| {
-            if (!std.mem.eql(u8, decl.name, "fromJson") and !std.mem.eql(u8, decl.name, "toJson")) {
-                @compileError(source ++ " declares `" ++ decl.name ++ "`; its only pub declarations may be fromJson and toJson");
+        for (@typeInfo(Hooks).@"struct".decl_names) |decl| {
+            if (!std.mem.eql(u8, decl, "fromJson") and !std.mem.eql(u8, decl, "toJson")) {
+                @compileError(source ++ " declares `" ++ decl ++ "`; its only pub declarations may be fromJson and toJson");
             }
         }
         if (@hasDecl(Hooks, "fromJson")) decode_mod.checkHook(T, Hooks, .fromJson);
@@ -313,7 +314,7 @@ fn objectLayout(comptime C: type, comptime X: type, comptime path: []const Step,
         const touched = C.find(X) != null;
         switch (@typeInfo(X)) {
             .@"struct" => |s| {
-                var l = fieldsLayout(C, X, s.fields, path, pre);
+                var l = fieldsLayout(C, X, s.field_names, s.field_types, path, pre);
                 l.touched = l.touched or touched;
                 return l;
             },
@@ -329,12 +330,12 @@ fn objectLayout(comptime C: type, comptime X: type, comptime path: []const Step,
                     return .{ .members = &.{ tag_member, payload_member }, .touched = touched };
                 }
                 // Every variant step of one union is inlined alike.
-                const inlined = u.fields.len != 0 and localStep(X, u.fields[0].name) == .inlined;
-                var variants: [u.fields.len]Layout = undefined;
+                const inlined = u.field_names.len != 0 and localStep(X, u.field_names[0]) == .inlined;
+                var variants: [u.field_names.len]Layout = undefined;
                 var any = touched;
-                for (u.fields, &variants) |f, *v| {
-                    const at = path ++ &[_]Step{.{ .owner = X, .name = f.name }};
-                    const P = Unwrapped(f.type);
+                for (u.field_names, u.field_types, &variants) |name, Field, *v| {
+                    const at = path ++ &[_]Step{.{ .owner = X, .name = name }};
+                    const P = Unwrapped(Field);
                     v.* = objectLayout(C, P, at, if (inlined) pre else at.len);
                     if (@typeInfo(P) == .@"struct") v.inlined = &[_]Inlined{.{ .type = P, .path = at }} ++ v.inlined;
                     any = any or v.touched;
@@ -347,28 +348,29 @@ fn objectLayout(comptime C: type, comptime X: type, comptime path: []const Step,
     }
 }
 
-/// The layout of `fields` of struct `S`, concatenated by halves to stay
-/// O(n log n).
-fn fieldsLayout(comptime C: type, comptime S: type, comptime fields: []const std.builtin.Type.StructField, comptime path: []const Step, comptime pre: usize) Layout {
+/// The layout of the fields `names` of struct `S`, of types `types`,
+/// concatenated by halves to stay O(n log n).
+fn fieldsLayout(comptime C: type, comptime S: type, comptime names: []const [:0]const u8, comptime types: []const type, comptime path: []const Step, comptime pre: usize) Layout {
     comptime {
-        if (fields.len > 1) {
-            const a = fieldsLayout(C, S, fields[0 .. fields.len / 2], path, pre);
-            const b = fieldsLayout(C, S, fields[fields.len / 2 ..], path, pre);
+        if (names.len > 1) {
+            const a = fieldsLayout(C, S, names[0 .. names.len / 2], types[0 .. types.len / 2], path, pre);
+            const b = fieldsLayout(C, S, names[names.len / 2 ..], types[types.len / 2 ..], path, pre);
             return .{ .members = a.members ++ b.members, .inlined = a.inlined ++ b.inlined, .touched = a.touched or b.touched };
         }
-        if (fields.len == 0) return .{};
-        const f = fields[0];
-        if (decode_mod.isSkipped(S, C, f.name)) return .{};
-        const at = path ++ &[_]Step{.{ .owner = S, .name = f.name }};
-        const local = localStep(S, f.name);
-        if (!decode_mod.isFlattened(S, C, f.name)) {
-            const key = decode_mod.renamedKey(S, C, f.name);
+        if (names.len == 0) return .{};
+        const name = names[0];
+        const Field = types[0];
+        if (decode_mod.isSkipped(S, C, name)) return .{};
+        const at = path ++ &[_]Step{.{ .owner = S, .name = name }};
+        const local = localStep(S, name);
+        if (!decode_mod.isFlattened(S, C, name)) {
+            const key = decode_mod.renamedKey(S, C, name);
             const same = local == .key and std.mem.eql(u8, local.key, key);
             return .{ .members = &.{.{ .key = key, .path = at, .role = .field, .local_from = if (same) pre else never }} };
         }
-        if (@typeInfo(f.type) != .@"struct") return .{};
-        var l = objectLayout(C, f.type, at, if (local == .inlined) pre else at.len);
-        l.inlined = &[_]Inlined{.{ .type = f.type, .path = at }} ++ l.inlined;
+        if (@typeInfo(Field) != .@"struct") return .{};
+        var l = objectLayout(C, Field, at, if (local == .inlined) pre else at.len);
+        l.inlined = &[_]Inlined{.{ .type = Field, .path = at }} ++ l.inlined;
         return l;
     }
 }
@@ -481,12 +483,12 @@ fn checkPair(comptime C: type, comptime T: type, comptime a: Member, comptime b:
 fn checkWireNames(comptime C: type, comptime T: type, comptime U: type, comptime path: []const Step) void {
     comptime {
         if (entryOf(C, U).json_rename == null) return;
-        const fields = @typeInfo(U).@"union".fields;
-        var names: [fields.len]Member = undefined;
-        for (fields, &names) |f, *m| {
-            const name = decode_mod.renamedKey(U, C, f.name);
-            const same = std.mem.eql(u8, decode_mod.renamedKey(U, Local, f.name), name);
-            m.* = .{ .key = name, .path = &.{.{ .owner = U, .name = f.name }}, .role = .field, .local_from = if (same) 0 else never };
+        const variants = @typeInfo(U).@"union".field_names;
+        var names: [variants.len]Member = undefined;
+        for (variants, &names) |variant, *m| {
+            const name = decode_mod.renamedKey(U, C, variant);
+            const same = std.mem.eql(u8, decode_mod.renamedKey(U, Local, variant), name);
+            m.* = .{ .key = name, .path = &.{.{ .owner = U, .name = variant }}, .role = .field, .local_from = if (same) 0 else never };
         }
         const sorted = sortByKey(&names);
         for (sorted[1..], 1..) |b, k| {
@@ -650,11 +652,11 @@ fn Budget(comptime T: type) type {
         /// Fields or variants of `T`, plus those of each field or variant type.
         const members: usize = count: switch (@typeInfo(T)) {
             inline .@"struct", .@"union" => |info| {
-                @setEvalBranchQuota(1000 + 10 * info.fields.len);
-                var n: usize = info.fields.len;
-                for (info.fields) |f| {
-                    switch (@typeInfo(f.type)) {
-                        inline .@"struct", .@"union" => |inner| n += inner.fields.len,
+                @setEvalBranchQuota(1000 + 10 * info.field_names.len);
+                var n: usize = info.field_names.len;
+                for (info.field_types) |F| {
+                    switch (@typeInfo(F)) {
+                        inline .@"struct", .@"union" => |inner| n += inner.field_names.len,
                         else => {},
                     }
                 }
@@ -668,9 +670,9 @@ fn Budget(comptime T: type) type {
         const tree: usize = count: switch (@typeInfo(T)) {
             inline .@"struct", .@"union" => |info| {
                 if (T == Value) break :count 0;
-                @setEvalBranchQuota(1000 + 10 * info.fields.len);
-                var n: usize = 2 * info.fields.len + 2;
-                for (info.fields) |f| n +|= Budget(Unwrapped(f.type)).tree;
+                @setEvalBranchQuota(1000 + 10 * info.field_names.len);
+                var n: usize = 2 * info.field_names.len + 2;
+                for (info.field_types) |F| n +|= Budget(Unwrapped(F)).tree;
                 break :count n;
             },
             else => 0,
@@ -803,12 +805,12 @@ test "codec: a union entry sets json_tag, json_payload, and variant renames" {
         .json_payload = "$data",
         .json_rename = blk: {
             const renames = comptime inner: {
-                const fields = @typeInfo(Component).@"union".fields;
-                var renames: [fields.len]AnnotationRename = undefined;
-                for (fields, 0..) |field, i| {
+                const names = @typeInfo(Component).@"union".field_names;
+                var renames: [names.len]AnnotationRename = undefined;
+                for (names, 0..) |name, i| {
                     renames[i] = .{
-                        .json_name = "Game.Components." ++ field.name,
-                        .zig_name = field.name,
+                        .json_name = "Game.Components." ++ name,
+                        .zig_name = name,
                     };
                 }
 
