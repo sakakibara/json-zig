@@ -5,6 +5,7 @@ on:
     branches: [main, zig-0.16]
   pull_request:
     branches: [main, zig-0.16]
+  workflow_dispatch:
 
 env:
   ZIG_VERSION: "0.16.0"
