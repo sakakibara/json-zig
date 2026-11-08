@@ -2,10 +2,11 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: ['ci/**']
   pull_request:
-    branches: [main]
   workflow_dispatch:
+
+permissions: {}
 
 # Cancel any in-flight runs for the same ref when a new commit lands.
 concurrency:
@@ -21,6 +22,7 @@ jobs:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    permissions: {contents: read}
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +32,7 @@ jobs:
           - macos-latest           # aarch64-macos
           - windows-latest         # x86_64-windows
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: install zig (unix)
         if: runner.os != 'Windows'
@@ -58,7 +60,7 @@ jobs:
           Expand-Archive -LiteralPath zig.zip -DestinationPath $dst
           "$dst\zig-x86_64-windows-$env:ZIG_VERSION" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .zig-cache
           key: zig-cache-${{ runner.os }}-${{ runner.arch }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
@@ -83,6 +85,7 @@ jobs:
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: {contents: read}
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +99,7 @@ jobs:
           - riscv64-linux-gnu     # 64-bit little-endian (RISC-V)
           - wasm32-wasi           # 32-bit wasm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: install zig
         shell: bash
         run: |
@@ -104,7 +107,7 @@ jobs:
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
           echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .zig-cache
           key: zig-cache-cross-${{ matrix.target }}-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
@@ -120,8 +123,9 @@ jobs:
     name: fuzz
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: {contents: read}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: install zig
         shell: bash
         run: |
@@ -129,7 +133,7 @@ jobs:
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
           echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .zig-cache
           key: zig-cache-fuzz-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
@@ -144,8 +148,9 @@ jobs:
     name: bench
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions: {contents: read}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: install zig
         shell: bash
         run: |
@@ -153,7 +158,7 @@ jobs:
           mkdir -p "$HOME/zig"
           curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
           echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-      - uses: actions/cache@v5
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .zig-cache
           key: zig-cache-bench-${{ env.ZIG_VERSION }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
@@ -161,3 +166,18 @@ jobs:
             zig-cache-bench-${{ env.ZIG_VERSION }}-
       - name: bench
         run: zig build bench
+
+  ci-ok:
+    if: always()
+    needs: [test, cross-compile, fuzz, bench]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {actions: read}
+    steps:
+      - shell: bash
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          set -o pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=all&per_page=100" --paginate --jq '.jobs[]' \
+            | jq -rs '[.[] | select(.name != "ci-ok")] | group_by(.name) | map(max_by(.run_attempt).conclusion) | unique[]' > c
+          [ "$(cat c)" = success ] || { echo "jobs ended:"; cat c; exit 1; }
