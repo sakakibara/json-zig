@@ -98,7 +98,8 @@ Supported types: `bool`, all int/float widths (overflow-checked),
 `[]const u8`, slices, fixed-size arrays, optionals, nested structs, enums
 (string name or integer tag), `union(enum)` (tagged-union with the
 `json_tag` annotation -- see below). Embed a raw `json.Value` to keep
-dynamic substructures.
+dynamic substructures. An unnamed value of a non-exhaustive enum encodes
+as its integer.
 
 ### Annotation-driven decode and encode
 

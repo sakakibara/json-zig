@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- `encodeTyped` applied `@tagName` to an unnamed value of a
+  non-exhaustive enum, such as one decoded from a JSON integer. Debug and
+  ReleaseSafe builds panicked; ReleaseFast and ReleaseSmall builds read
+  outside the enum's name table, writing a wrong name, stray bytes, or
+  crashing. Such a value now encodes as its integer, so one decoded from
+  a JSON integer encodes back to that integer.
+
 ## [0.3.0] - 2026-07-21
 
 ### Added
@@ -118,7 +129,8 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/sakakibara/json-zig/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/json-zig/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/sakakibara/json-zig/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sakakibara/json-zig/releases/tag/v0.1.0
