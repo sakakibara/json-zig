@@ -3,37 +3,47 @@ name: release
 # Publish a GitHub Release when a vX.Y.Z tag is pushed. Release notes are
 # the matching CHANGELOG.md section, so the changelog stays the single
 # source of truth and the tag, build.zig.zon, and changelog cannot drift
-# apart in a published release. A tag push triggers only this workflow (not
-# ci.yml, which runs on branches), so the full gate is repeated here: a tag
-# must never publish an unverified commit.
+# apart in a published release. A tag publishes only when it points at a
+# commit on a branch that releases whose push run's ci-ok passed.
 on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ZIG_VERSION: "0.17.0"
-
 jobs:
   release:
     name: release
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {contents: write, actions: read}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with: {fetch-depth: 0, persist-credentials: false}
 
-      # Fail before the build if the tag, build.zig.zon, and CHANGELOG.md
-      # disagree, or the changelog section is missing. Cheapest gate first.
+      - name: verify the tagged commit landed and passed ci-ok
+        shell: bash
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          b=$(git branch -r --contains "$GITHUB_SHA" --format='%(refname:lstrip=3)' | grep -Ex 'main|zig-[0-9]+\.[0-9]+|v[0-9]+(\.[0-9]+)?\.x' || true)
+          [ -n "$b" ] || { echo "tag is on no branch that releases"; exit 1; }
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --commit "$GITHUB_SHA" --event push --workflow ci.yml --json databaseId --jq '.[0].databaseId')
+          c=$(gh run view "$id" -R "$GITHUB_REPOSITORY" --json jobs --jq '.jobs[] | select(.name == "ci-ok") | .conclusion')
+          [ "$c" = success ] || { echo "ci-ok of the push run: $c"; exit 1; }
+
       - name: verify version and extract notes
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
           version="${tag#v}"
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "tag $tag is not v<major>.<minor>.<patch>" >&2
+            exit 1
+          fi
           zon_version="$(sed -n 's/^[[:space:]]*\.version = "\(.*\)",/\1/p' build.zig.zon)"
           if [ "$version" != "$zon_version" ]; then
             echo "tag $tag does not match build.zig.zon version $zon_version" >&2
@@ -51,31 +61,8 @@ jobs:
           echo "release notes for $version:"
           cat release-notes.md
 
-      - name: install zig
-        shell: bash
-        run: |
-          url="https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
-          mkdir -p "$HOME/zig"
-          curl -fsSL "$url" | tar -xJ -C "$HOME/zig"
-          echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
-
-      # Gate the release on the same checks ci.yml runs on main: the unit +
-      # vendored-conformance test suite, a release-mode build, and the
-      # examples. A broken commit must never become a published release.
-      - name: zig build test
-        run: zig build test --summary all
-
-      - name: zig build (release)
-        run: zig build -Doptimize=fast --summary all
-
-      - name: zig build examples
-        run: zig build examples
-
-      # Third-party action pinned to a commit SHA (not a movable tag) so a
-      # compromised or retagged release cannot run with this job's
-      # contents:write token. SHA is v3.0.2.
       - name: create release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
