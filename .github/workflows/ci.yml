@@ -79,6 +79,10 @@ jobs:
       - name: build examples
         run: zig build examples
 
+      - name: build docs
+        if: matrix.os == 'ubuntu-latest'
+        run: zig build docs
+
   # Cross-compile only (no test execution). Covers the width, endianness,
   # and ISA axes not exercised by the native `test` runners.
   cross-compile:
