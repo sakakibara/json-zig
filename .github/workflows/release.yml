@@ -79,3 +79,5 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           body_path: release-notes.md
+          # 0.4.x releases from v0.4.x are never the highest version.
+          make_latest: false
