@@ -30,8 +30,8 @@ const cfg = try json.parseInto(Config, arena, src, .{});
 
 ## Install
 
-Requires Zig 0.17. For Zig 0.16, use 0.3.0
-(`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`).
+Requires Zig 0.17. For Zig 0.16, use 0.3.1
+(`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.1`).
 
 ```sh
 zig fetch --save git+https://github.com/sakakibara/json-zig
@@ -65,7 +65,7 @@ exe.root_module.addImport("json", json.module("json"));
 
   | Using Zig | Pin |
   | --- | --- |
-  | 0.16 | `v0.3.0` (`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.0`) |
+  | 0.16 | `v0.3.1` (`zig fetch --save git+https://github.com/sakakibara/json-zig#v0.3.1`) |
 
 - **Versioning:** semantic versioning. Before 1.0, a minor release (0.y.0)
   may break and a patch (0.y.z) never does. Breaking changes are marked
