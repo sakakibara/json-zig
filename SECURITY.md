@@ -4,7 +4,8 @@
 
 | Version | Zig | Security fixes |
 | --- | --- | --- |
-| 0.4.x | 0.17 | Yes |
+| 0.5.x | 0.17 | Yes |
+| 0.4.x | 0.17 | Yes, through the date in the README's [Compatibility](README.md#compatibility) section |
 | 0.3.x | 0.16 | Yes, through the date in the README's [Compatibility](README.md#compatibility) section |
 | Earlier | | No |
 

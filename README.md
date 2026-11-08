@@ -56,6 +56,9 @@ exe.root_module.addImport("json", json.module("json"));
   security and data-loss fixes through 2027-11-03. A fix that does not
   port is listed here. Either date moves earlier only with 90 days' notice
   in this section.
+- **0.4.x:** security and data-loss fixes through 2027-02-08, on a
+  `v0.4.x` branch cut from 0.4.0 when a fix needs one. The date moves
+  earlier only with 90 days' notice in this section.
 - **Pull requests:** against `main`; a fix that applies only to Zig 0.16,
   against `zig-0.16`.
 - **Pins:**

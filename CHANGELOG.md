@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-08
+
 ### Added
 
 - `json_rename` on enums: an enum declaring
@@ -26,6 +28,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   enum you cannot edit, clear its renames with a codec entry
   `json.Annotations(E){ .json_rename = &.{} }`; otherwise send and accept
   the JSON names.
+  0.4.x takes security and data-loss fixes; the README's Compatibility
+  section gives the date.
 
 ## [0.4.0] - 2026-11-03
 
@@ -171,7 +175,8 @@ lossless document model, incremental event reader, and tooling.
   (`zig build bench`), generated reference docs (`zig build docs`), and
   runnable examples (`basic`, `typed`, `edit`, `spans`, `stream`).
 
-[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/sakakibara/json-zig/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/sakakibara/json-zig/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/sakakibara/json-zig/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sakakibara/json-zig/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sakakibara/json-zig/compare/v0.1.1...v0.2.0
