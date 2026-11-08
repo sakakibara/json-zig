@@ -198,8 +198,9 @@ pub fn encode(w: *std.Io.Writer, value: Value, options: EncodeOptions) EncodeErr
 /// `json_skip` / `json_flatten` / `json_tag` / `json_payload` annotations
 /// and `toJson` hooks that `decode` honors, so the output decodes back via
 /// `parseInto(T, ...)`. Null optional fields are omitted entirely; enums
-/// emit their tag name as a string; tagged unions emit the discriminator
-/// member first, then either the payload's fields inline or, with
+/// emit their tag name as a string, and an unnamed value of a non-exhaustive
+/// enum its integer; tagged unions emit the discriminator member first,
+/// then either the payload's fields inline or, with
 /// `json_payload`, the payload under that member. `options.indent` pretty-prints
 /// and `options.sort_keys` emits members in ascending key order (declaration
 /// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
