@@ -57,6 +57,8 @@ jobs:
           "$dst\zig-x86_64-windows-$env:ZIG_VERSION" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: test
         run: zig build test --summary all
+      - name: zig build (release)
+        run: zig build -Doptimize=ReleaseFast --summary all
       - name: build examples
         run: zig build examples
 
