@@ -122,18 +122,144 @@ pub fn validateAnnotations(comptime T: type) void {
 /// Returns the effective JSON key for `field_name` on type `T`.
 pub fn renamedKey(comptime T: type, comptime TCodec: type, comptime field_name: []const u8) []const u8 {
     comptime {
-        if (codec_mod.entryOf(TCodec, T).json_rename) |renames| {
-            for (renames) |r| {
-                if (std.mem.eql(u8, r.zig_name, field_name)) return r.json_name;
-            }
-            return field_name;
-        }
+        if (codec_mod.entryOf(TCodec, T).json_rename) |renames| return codec_mod.renameIn(renames, field_name);
         if (!@hasDecl(T, "json_rename")) return field_name;
         const renames = T.json_rename;
         if (@hasField(@TypeOf(renames), field_name)) {
             return @field(renames, field_name);
         }
         return field_name;
+    }
+}
+
+/// The wire names of enum `E`'s values through codec `TCodec`, computed
+/// once per pair: `names` in declaration order, whether any differs from
+/// its tag name, and lookups both ways.
+pub fn EnumNames(comptime E: type, comptime TCodec: type) type {
+    return struct {
+        const tags = @typeInfo(E).@"enum".field_names;
+        const entry_list = codec_mod.entryOf(TCodec, E).json_rename;
+        const declared = @hasDecl(E, "json_rename") or entry_list != null;
+
+        pub const names: []const []const u8 = blk: {
+            @setEvalBranchQuota(1000 + 10 * tags.len);
+            var out: [tags.len][]const u8 = undefined;
+            if (entry_list) |list| {
+                out = codec_mod.enumNamesFrom(E, list);
+            } else {
+                for (tags, &out) |tag, *name| name.* = renamedKey(E, TCodec, tag);
+            }
+            const fixed = out;
+            break :blk &fixed;
+        };
+
+        /// Value indices ordered by tag name, for `nameOf`.
+        const by_tag = blk: {
+            @setEvalBranchQuota(1000 + 10 * tags.len);
+            var plain: [tags.len][]const u8 = undefined;
+            for (&plain, tags) |*p, tag| p.* = tag;
+            const fixed = plain;
+            break :blk codec_mod.sortedIndices(&fixed);
+        };
+
+        /// The wire name of tag `t`, found by binary search over `by_tag`.
+        pub fn nameOf(comptime t: E) []const u8 {
+            comptime {
+                @setEvalBranchQuota(1000 + 10 * by_tag.len);
+                const tag = @tagName(t);
+                var lo = 0;
+                var hi = by_tag.len;
+                while (lo < hi) {
+                    const mid = (lo + hi) / 2;
+                    switch (std.mem.order(u8, tags[by_tag[mid]], tag)) {
+                        .lt => lo = mid + 1,
+                        .gt => hi = mid,
+                        .eq => return names[by_tag[mid]],
+                    }
+                }
+                unreachable;
+            }
+        }
+
+        pub const renamed: bool = declared and blk: {
+            @setEvalBranchQuota(1000 + 10 * tags.len);
+            for (tags, names) |tag, name| {
+                if (!std.mem.eql(u8, tag, name)) break :blk true;
+            }
+            break :blk false;
+        };
+
+        /// Wire name to value, for an enum with renames.
+        pub const map = blk: {
+            @setEvalBranchQuota(1000 + 10 * tags.len);
+            var kvs: [tags.len]struct { []const u8, E } = undefined;
+            for (tags, names, &kvs) |tag, name, *kv| kv.* = .{ name, @field(E, tag) };
+            break :blk std.StaticStringMap(E).initComptime(kvs);
+        };
+    };
+}
+
+/// Comptime check of enum `E`'s `json_rename` through codec `TCodec`. The
+/// enum's own declaration must be a struct mapping values of `E` to
+/// strings, whatever the codec says, as `validateAnnotations` checks a
+/// struct's own keys. The wire names in effect must be distinct; a codec entry's list is
+/// checked when the codec is built, so here only the enum's own list can
+/// collide.
+pub fn validateEnumAnnotations(comptime E: type, comptime TCodec: type) void {
+    comptime {
+        if (@hasDecl(E, "json_rename")) {
+            const R = @TypeOf(E.json_rename);
+            if (@typeInfo(R) != .@"struct") {
+                @compileError("json_rename on " ++ @typeName(E) ++ " must be a struct of value-name strings, got " ++ @typeName(R));
+            }
+            const keys = @typeInfo(R).@"struct".field_names;
+            @setEvalBranchQuota(1000 + 10 * keys.len);
+            for (keys) |name| {
+                if (!@hasField(E, name)) {
+                    @compileError("json_rename entry `" ++ name ++ "` does not match any value of " ++ @typeName(E));
+                }
+                const V = @TypeOf(@field(E.json_rename, name));
+                if (!isString(V)) {
+                    @compileError("json_rename entry `" ++ name ++ "` of " ++ @typeName(E) ++ " must be a string, got " ++ @typeName(V));
+                }
+            }
+        }
+        if (codec_mod.entryOf(TCodec, E).json_rename != null) return;
+        const N = EnumNames(E, TCodec);
+        if (N.renamed) codec_mod.checkEnumWireNames(E, N.names, @typeName(E) ++ ".json_rename");
+    }
+}
+
+fn isString(comptime S: type) bool {
+    return switch (@typeInfo(S)) {
+        .pointer => |p| switch (p.size) {
+            .slice => p.child == u8,
+            .one => @typeInfo(p.child) == .array and @typeInfo(p.child).array.child == u8,
+            else => false,
+        },
+        else => false,
+    };
+}
+
+/// The value of enum `E` whose wire name through codec `TCodec` is `s`.
+fn enumFromName(comptime E: type, comptime TCodec: type, s: []const u8) ?E {
+    const N = EnumNames(E, TCodec);
+    return if (comptime N.renamed) N.map.get(s) else std.meta.stringToEnum(E, s);
+}
+
+/// The wire name of `value` through codec `TCodec`.
+pub fn enumName(comptime E: type, comptime TCodec: type, value: E) []const u8 {
+    comptime validateEnumAnnotations(E, TCodec);
+    if (comptime !EnumNames(E, TCodec).renamed) return @tagName(value);
+    if (comptime @typeInfo(E).@"enum".mode == .exhaustive) {
+        return switch (value) {
+            inline else => |t| comptime EnumNames(E, TCodec).nameOf(t),
+        };
+    } else {
+        return switch (value) {
+            inline else => |t| comptime EnumNames(E, TCodec).nameOf(t),
+            _ => @tagName(value),
+        };
     }
 }
 
@@ -381,7 +507,7 @@ fn decodeInner(comptime T: type, comptime TCodec: type, arena: Allocator, value:
         .array => |a| decodeArray(T, TCodec, a, arena, value, options, path),
         .optional => |o| decodeOptional(o.child, TCodec, arena, value, options, path),
         .@"struct" => |s| decodeStruct(T, TCodec, s, arena, value, options, path),
-        .@"enum" => decodeEnum(T, value, arena, options, path),
+        .@"enum" => decodeEnum(T, TCodec, value, arena, options, path),
         else => @compileError("json decode: unsupported type " ++ @typeName(T)),
     };
 }
@@ -708,10 +834,11 @@ fn decodeTaggedUnion(comptime T: type, comptime TCodec: type, comptime tag_field
     return error.InvalidEnumValue;
 }
 
-fn decodeEnum(comptime T: type, value: Value, arena: Allocator, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+fn decodeEnum(comptime T: type, comptime TCodec: type, value: Value, arena: Allocator, options: parser_mod.ParseOptions, path: *PathBuilder) DecodeError!T {
+    comptime validateEnumAnnotations(T, TCodec);
     switch (value) {
         .string => |s| {
-            if (std.meta.stringToEnum(T, s)) |v| return v;
+            if (enumFromName(T, TCodec, s)) |v| return v;
             if (options.errors) |list| {
                 const msg = try arena.print("invalid enum value `{s}` for {s}", .{ s, @typeName(T) });
                 try appendDiag(list, arena, path, msg, null);
@@ -897,8 +1024,8 @@ fn streamValue(comptime T: type, comptime TCodec: type, p: *parser_mod.Parser, t
             else => error.TypeMismatch,
         },
         .@"enum" => switch (t.kind) {
-            .string => try decodeEnum(T, .{ .string = try p.decodeString(t) }, p.arena, p.options, &path),
-            .number => try decodeEnum(T, try p.parseNumber(t), p.arena, p.options, &path),
+            .string => try decodeEnum(T, TCodec, .{ .string = try p.decodeString(t) }, p.arena, p.options, &path),
+            .number => try decodeEnum(T, TCodec, try p.parseNumber(t), p.arena, p.options, &path),
             else => error.TypeMismatch,
         },
         .pointer => |ptr| try streamPointer(T, TCodec, ptr, p, t, depth),
@@ -1897,4 +2024,260 @@ test "streaming: flatten inside flatten decodes from one object" {
     try testing.expectError(error.UnknownField, parseInto(T, Codec(.{}), ar.allocator(), "{\"x\":1,\"y\":2,\"z\":3,\"w\":4}", .{}));
     // The skipped field's wire name is NOT an expected key.
     try testing.expectError(error.UnknownField, parseInto(T, Codec(.{}), ar.allocator(), "{\"x\":1,\"y\":2,\"z\":3,\"skipped\":9}", .{}));
+}
+
+// Enum renames
+
+/// Decodes `src` as `T` through codec `C` on all three paths: the streaming
+/// pass alone (for a type that streams), `parseInto`, and the tree. The
+/// streaming pass is called directly because `parseInto` reruns the tree
+/// after a streaming error.
+fn expectDecodesAll(comptime T: type, comptime C: type, src: []const u8, want: T) !void {
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    if (comptime !needsTree(T, C)) try testing.expectEqual(want, try streamParseInto(T, C, a, src, .{}));
+    try testing.expectEqual(want, try parseInto(T, C, a, src, .{}));
+    try testing.expectEqual(want, try decode(T, C, a, try parser_mod.parse(a, src, .{}), .{}));
+}
+
+fn expectRejectsAll(comptime T: type, comptime C: type, src: []const u8, want: anyerror) !void {
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    if (comptime !needsTree(T, C)) try testing.expectError(want, streamParseInto(T, C, a, src, .{}));
+    try testing.expectError(want, parseInto(T, C, a, src, .{}));
+    try testing.expectError(want, decode(T, C, a, try parser_mod.parse(a, src, .{}), .{}));
+}
+
+fn expectEncodes(comptime C: type, value: anytype, options: @import("encoder.zig").EncodeOptions, want: []const u8) !void {
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var aw: std.Io.Writer.Allocating = .init(a);
+    try @import("encoder.zig").encodeTyped(C, &aw.writer, value, a, options);
+    try testing.expectEqualStrings(want, aw.written());
+}
+
+const RenamedLevel = enum(u8) {
+    pub const json_rename = .{ .warn = "warning", .err = "error" };
+
+    debug,
+    info,
+    warn,
+    err,
+};
+
+test "enum rename: a renamed value decodes from its JSON name only" {
+    const S = struct { level: RenamedLevel };
+    const L = Codec(.{});
+    try expectDecodesAll(S, L, "{\"level\":\"warning\"}", .{ .level = .warn });
+    try expectDecodesAll(S, L, "{\"level\":\"error\"}", .{ .level = .err });
+    try expectDecodesAll(S, L, "{\"level\":\"debug\"}", .{ .level = .debug });
+    try expectRejectsAll(S, L, "{\"level\":\"warn\"}", error.InvalidEnumValue);
+    try expectRejectsAll(S, L, "{\"level\":\"err\"}", error.InvalidEnumValue);
+    try expectDecodesAll(RenamedLevel, L, "\"warning\"", .warn);
+    try expectRejectsAll(RenamedLevel, L, "\"warn\"", error.InvalidEnumValue);
+}
+
+test "enum rename: integer tags decode whatever the renames" {
+    const S = struct { level: RenamedLevel };
+    const L = Codec(.{});
+    try expectDecodesAll(S, L, "{\"level\":2}", .{ .level = .warn });
+    try expectRejectsAll(S, L, "{\"level\":9}", error.InvalidEnumValue);
+}
+
+test "enum rename: the diagnostic quotes the string received" {
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    var errors: std.ArrayList(parser_mod.Diagnostic) = .empty;
+    const S = struct { level: RenamedLevel };
+    try testing.expectError(error.InvalidEnumValue, parseInto(S, Codec(.{}), a, "{\"level\":\"warn\"}", .{ .errors = &errors }));
+    try testing.expectEqual(@as(usize, 1), errors.items.len);
+    try testing.expectEqualStrings("invalid enum value `warn` for " ++ @typeName(RenamedLevel) ++ " (at level)", errors.items[0].message);
+}
+
+test "enum rename: encodeTyped writes JSON names and round-trips" {
+    const S = struct { a: RenamedLevel, b: RenamedLevel, list: []const RenamedLevel };
+    const v: S = .{ .a = .warn, .b = .info, .list = &.{ .err, .debug } };
+    const want = "{\"a\":\"warning\",\"b\":\"info\",\"list\":[\"error\",\"debug\"]}";
+    try expectEncodes(Codec(.{}), v, .{}, want);
+    try expectEncodes(Codec(.{}), v, .{ .sort_keys = true }, want);
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const back = try parseInto(S, Codec(.{}), ar.allocator(), want, .{});
+    try testing.expectEqual(v.a, back.a);
+    try testing.expectEqual(v.b, back.b);
+    try testing.expectEqualSlices(RenamedLevel, v.list, back.list);
+}
+
+test "enum rename: swapped names and an empty name" {
+    const Swap = enum {
+        pub const json_rename = .{ .a = "b", .b = "a" };
+        a,
+        b,
+    };
+    const L = Codec(.{});
+    try expectDecodesAll(Swap, L, "\"b\"", .a);
+    try expectDecodesAll(Swap, L, "\"a\"", .b);
+    try expectEncodes(L, Swap.a, .{}, "\"b\"");
+    const Empty = enum {
+        pub const json_rename = .{ .none = "" };
+        none,
+        some,
+    };
+    try expectDecodesAll(Empty, L, "\"\"", .none);
+    try expectRejectsAll(Empty, L, "\"none\"", error.InvalidEnumValue);
+    try expectEncodes(L, Empty.none, .{}, "\"\"");
+}
+
+test "enum rename: an enum with no values takes an empty entry" {
+    const Z = enum {};
+    const C = Codec(.{codec_mod.Annotations(Z){ .json_rename = &.{} }});
+    try expectRejectsAll(Z, C, "\"a\"", error.InvalidEnumValue);
+}
+
+test "enum rename: a non-exhaustive enum decodes names and integers" {
+    const N = enum(u8) {
+        pub const json_rename = .{ .a = "A" };
+        a,
+        b,
+        _,
+    };
+    const L = Codec(.{});
+    try expectDecodesAll(N, L, "\"A\"", .a);
+    try expectDecodesAll(N, L, "\"b\"", .b);
+    try expectRejectsAll(N, L, "\"a\"", error.InvalidEnumValue);
+    try expectDecodesAll(N, L, "7", @fromBackingInt(@intCast(7)));
+    try expectEncodes(L, N.a, .{}, "\"A\"");
+    try expectEncodes(L, N.b, .{}, "\"b\"");
+}
+
+test "enum rename: a codec entry overrides, falls back, and clears" {
+    const S = struct { level: RenamedLevel };
+    const Override = Codec(.{codec_mod.Annotations(RenamedLevel){ .json_rename = &.{.{ .zig_name = "info", .json_name = "notice" }} }});
+    try expectDecodesAll(S, Override, "{\"level\":\"notice\"}", .{ .level = .info });
+    try expectDecodesAll(S, Override, "{\"level\":\"warn\"}", .{ .level = .warn });
+    try expectRejectsAll(S, Override, "{\"level\":\"warning\"}", error.InvalidEnumValue);
+    try expectRejectsAll(S, Override, "{\"level\":\"info\"}", error.InvalidEnumValue);
+    try expectEncodes(Override, S{ .level = .info }, .{}, "{\"level\":\"notice\"}");
+
+    const Fallback = Codec(.{codec_mod.Annotations(RenamedLevel){}});
+    try expectDecodesAll(S, Fallback, "{\"level\":\"warning\"}", .{ .level = .warn });
+    try expectRejectsAll(S, Fallback, "{\"level\":\"warn\"}", error.InvalidEnumValue);
+
+    const Clear = Codec(.{codec_mod.Annotations(RenamedLevel){ .json_rename = &.{} }});
+    try expectDecodesAll(S, Clear, "{\"level\":\"warn\"}", .{ .level = .warn });
+    try expectRejectsAll(S, Clear, "{\"level\":\"warning\"}", error.InvalidEnumValue);
+    try expectEncodes(Clear, S{ .level = .warn }, .{}, "{\"level\":\"warn\"}");
+}
+
+test "enum rename: a codec entry replaces an enum's own colliding names" {
+    const Clash = enum {
+        pub const json_rename = .{ .p = "z", .q = "z" };
+        p,
+        q,
+    };
+    const C = Codec(.{codec_mod.Annotations(Clash){ .json_rename = &.{} }});
+    try expectDecodesAll(Clash, C, "\"q\"", .q);
+    try expectEncodes(C, Clash.p, .{}, "\"p\"");
+}
+
+test "enum rename: a codec entry applies wherever the enum appears" {
+    const E = @Enum(u8, .exhaustive, &.{ "one", "two" }, &.{ 0, 1 });
+    const C = Codec(.{codec_mod.Annotations(E){ .json_rename = &.{.{ .zig_name = "two", .json_name = "2nd" }} }});
+    const Holder = struct {
+        opt: ?E = null,
+        many: []const E = &.{},
+        fixed: [2]E = .{ .one, .one },
+    };
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const src = "{\"opt\":\"2nd\",\"many\":[\"one\",\"2nd\"],\"fixed\":[\"2nd\",\"one\"]}";
+    for ([_]Holder{
+        try streamParseInto(Holder, C, a, src, .{}),
+        try decode(Holder, C, a, try parser_mod.parse(a, src, .{}), .{}),
+    }) |h| {
+        try testing.expectEqual(@as(?E, .two), h.opt);
+        try testing.expectEqualSlices(E, &.{ .one, .two }, h.many);
+        try testing.expectEqual([2]E{ .two, .one }, h.fixed);
+    }
+    try expectEncodes(C, Holder{ .opt = .two, .many = &.{.two}, .fixed = .{ .one, .two } }, .{}, "{\"opt\":\"2nd\",\"many\":[\"2nd\"],\"fixed\":[\"one\",\"2nd\"]}");
+
+    const Inner = struct { e: E };
+    const Flat = struct {
+        pub const json_flatten = .{"inner"};
+        inner: Inner,
+    };
+    try expectDecodesAll(Flat, C, "{\"e\":\"2nd\"}", .{ .inner = .{ .e = .two } });
+    try expectEncodes(C, Flat{ .inner = .{ .e = .two } }, .{}, "{\"e\":\"2nd\"}");
+
+    const Inline = union(enum) {
+        pub const json_tag = "t";
+        x: Inner,
+    };
+    try expectDecodesAll(Inline, C, "{\"t\":\"x\",\"e\":\"2nd\"}", .{ .x = .{ .e = .two } });
+    try expectEncodes(C, Inline{ .x = .{ .e = .two } }, .{}, "{\"t\":\"x\",\"e\":\"2nd\"}");
+
+    const Boxed = union(enum) {
+        pub const json_tag = "t";
+        pub const json_payload = "v";
+        x: E,
+    };
+    try expectDecodesAll(Boxed, C, "{\"t\":\"x\",\"v\":\"2nd\"}", .{ .x = .two });
+    try expectEncodes(C, Boxed{ .x = .two }, .{}, "{\"t\":\"x\",\"v\":\"2nd\"}");
+}
+
+test "enum rename: a union's discriminator keeps the union's own names" {
+    const Kind = enum {
+        pub const json_rename = .{ .a = "AA" };
+        a,
+        b,
+    };
+    const U = union(Kind) {
+        pub const json_tag = "t";
+        a: void,
+        b: void,
+    };
+    const S = struct { k: Kind, u: U };
+    const L = Codec(.{});
+    try expectDecodesAll(S, L, "{\"k\":\"AA\",\"u\":{\"t\":\"a\"}}", .{ .k = .a, .u = .a });
+    try expectEncodes(L, S{ .k = .a, .u = .a }, .{}, "{\"k\":\"AA\",\"u\":{\"t\":\"a\"}}");
+}
+
+fn bigEnumNames(comptime n: usize) [n][]const u8 {
+    @setEvalBranchQuota(1000 * n);
+    var names: [n][]const u8 = undefined;
+    for (&names, 0..) |*name, i| name.* = std.fmt.comptimePrint("v{d}", .{i});
+    return names;
+}
+
+test "enum rename: large enums compile, with and without renames" {
+    const n = 300;
+    const names = comptime bigEnumNames(n);
+    const Big = @Enum(u16, .exhaustive, &names, &std.simd.iota(u16, n));
+    const L = Codec(.{});
+    try expectDecodesAll(Big, L, "\"v299\"", .v299);
+    try expectEncodes(L, Big.v150, .{}, "\"v150\"");
+
+    const renames = comptime blk: {
+        @setEvalBranchQuota(100 * n);
+        var out: [n]codec_mod.AnnotationRename = undefined;
+        for (&out, names) |*r, name| r.* = .{ .zig_name = name, .json_name = "w" ++ name[1..] };
+        break :blk out;
+    };
+    const C = Codec(.{codec_mod.Annotations(Big){ .json_rename = &renames }});
+    try expectRejectsAll(Big, C, "\"v299\"", error.InvalidEnumValue);
+    var ar = ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    inline for (0..n) |i| {
+        const value: Big = @field(Big, names[i]);
+        var aw: std.Io.Writer.Allocating = .init(a);
+        try @import("encoder.zig").encodeTyped(C, &aw.writer, value, a, .{});
+        try testing.expectEqualStrings("\"" ++ renames[i].json_name ++ "\"", aw.written());
+        try testing.expectEqual(value, try parseInto(Big, C, a, aw.written(), .{}));
+    }
 }

@@ -6,6 +6,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `json_rename` on enums: an enum declaring
+  `pub const json_rename = .{ .warn = "warning" };` decodes `"warning"` as
+  `.warn` and encodes `.warn` as `"warning"`. Integer tags decode as
+  before. A codec now accepts an `Annotations(E)` entry for an enum,
+  taking only `json_rename`, with the same precedence as for structs and
+  unions.
+
+### Changed
+
+- **BREAKING:** an enum's own `json_rename` declaration is now read;
+  previously it was ignored. A renamed value now decodes only from its
+  JSON name, a Zig name that is another value's JSON name decodes as that
+  value, and `encodeTyped` writes the JSON names. The declaration must be
+  a struct of strings naming existing values, with distinct names, or the
+  build fails. To keep the Zig names, remove the declaration, or for an
+  enum you cannot edit, clear its renames with a codec entry
+  `json.Annotations(E){ .json_rename = &.{} }`; otherwise send and accept
+  the JSON names.
+
 ## [0.4.0] - 2026-11-03
 
 ### Added

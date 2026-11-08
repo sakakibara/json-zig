@@ -135,7 +135,7 @@ pub const DecodeError = decode_mod.DecodeError;
 
 /// Decode a parsed `Value` tree into `T` via comptime reflection.
 /// Supports bool, ints (overflow-checked), floats, `[]const u8`,
-/// slices, fixed-size arrays, optionals, nested structs, enums (string
+/// slices, fixed-size arrays, optionals, nested structs, enums (by
 /// name or integer tag), tagged unions via `json_tag`, embedded `Value`
 /// fields (kept dynamic), custom `fromJson` hooks, and the
 /// `json_rename` / `json_skip` / `json_flatten` / `json_payload`
@@ -198,12 +198,13 @@ pub fn encode(w: *std.Io.Writer, value: Value, options: EncodeOptions) EncodeErr
 /// `json_skip` / `json_flatten` / `json_tag` / `json_payload` annotations
 /// and `toJson` hooks that `decode` honors, so the output decodes back via
 /// `parseInto(T, ...)`. Null optional fields are omitted entirely; enums
-/// emit their tag name as a string; tagged unions emit the discriminator
-/// member first, then either the payload's fields inline or, with
-/// `json_payload`, the payload under that member. `options.indent` pretty-prints
-/// and `options.sort_keys` emits members in ascending key order (declaration
-/// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
-/// the buffers `sort_keys` uses to reorder members.
+/// emit their name, after any `json_rename`, as a string; tagged unions
+/// emit the discriminator member first, then either the payload's fields
+/// inline or, with `json_payload`, the payload under that member.
+/// `options.indent` pretty-prints and `options.sort_keys` emits members in
+/// ascending key order (declaration order otherwise). `arena` only backs
+/// `Value`s built by `toJson` hooks and the buffers `sort_keys` uses to
+/// reorder members.
 ///
 /// Annotations and hooks are read from `@TypeOf(value)`, so bind an
 /// anonymous struct literal to the annotated type before passing it

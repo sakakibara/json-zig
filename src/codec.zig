@@ -1,12 +1,12 @@
 //! Annotations supplied from outside a type.
 //!
-//! json-zig reads `json_*` annotations and `fromJson` / `toJson` hooks
-//! from declarations on the type, but a type built with `@Struct` or
-//! `@Union` cannot carry declarations, and a type from another package
-//! cannot be edited to add them. `Codec` takes
-//! `Annotations(T)` entries for such types and offers the module's typed
-//! entry points over them. For each type and property, an entry's non-null
-//! value wins over the type's own declaration, which wins over the default.
+//! json-zig reads `json_*` annotations and `fromJson` / `toJson` hooks from
+//! declarations on the type, but a type built with `@Struct`, `@Union`, or
+//! `@Enum` cannot carry declarations, and a type from another package
+//! cannot be edited to add them. `Codec` takes `Annotations(T)` entries for
+//! such types and offers the module's typed entry points over them. For
+//! each type and property, an entry's non-null value wins over the type's
+//! own declaration, which wins over the default.
 
 const std = @import("std");
 const parser_mod = @import("parser.zig");
@@ -23,8 +23,8 @@ const DecodeError = decode_mod.DecodeError;
 const EncodeError = encoder_mod.EncodeError;
 const Value = value_mod.Value;
 
-/// One `json_rename` pair: the Zig field or variant name and the JSON key
-/// it maps to, the same direction as a type-local
+/// One `json_rename` pair: the Zig field, variant, or enum value name and
+/// the JSON name it maps to, the same direction as a type-local
 /// `.{ .zig_field = "json-name" }`.
 pub const AnnotationRename = struct {
     zig_name: []const u8,
@@ -38,7 +38,7 @@ pub fn Annotations(comptime T: type) type {
         /// The type these annotations apply to.
         pub const associated_type: type = T;
 
-        /// Field or variant name overrides.
+        /// Field, variant, or enum value name overrides.
         json_rename: ?[]const AnnotationRename = null,
         /// Struct fields whose members are read from and written to the
         /// parent object.
@@ -85,7 +85,7 @@ pub fn Codec(comptime entries: anytype) type {
 
         /// Decode a parsed `Value` tree into `T` via comptime reflection.
         /// Supports bool, ints (overflow-checked), floats, `[]const u8`,
-        /// slices, fixed-size arrays, optionals, nested structs, enums (string
+        /// slices, fixed-size arrays, optionals, nested structs, enums (by
         /// name or integer tag), tagged unions via `json_tag`, embedded `Value`
         /// fields (kept dynamic), custom `fromJson` hooks, and the
         /// `json_rename` / `json_skip` / `json_flatten` / `json_payload`
@@ -125,9 +125,10 @@ pub fn Codec(comptime entries: anytype) type {
         /// `json_skip` / `json_flatten` / `json_tag` / `json_payload` annotations
         /// and `toJson` hooks that `decode` honors, so the output decodes back
         /// through this codec's `parseInto`. Null optional fields are omitted
-        /// entirely; enums emit their tag name as a string; tagged unions emit the
-        /// discriminator member first, then either the payload's fields inline or,
-        /// with `json_payload`, the payload under that member. `options.indent` pretty-prints
+        /// entirely; enums emit their name, after any `json_rename`, as a
+        /// string; tagged unions emit the discriminator member first, then
+        /// either the payload's fields inline or, with `json_payload`, the
+        /// payload under that member. `options.indent` pretty-prints
         /// and `options.sort_keys` emits members in ascending key order (declaration
         /// order otherwise). `arena` only backs `Value`s built by `toJson` hooks and
         /// the buffers `sort_keys` uses to reorder members.
@@ -161,7 +162,11 @@ fn isKeyed(comptime T: type) bool {
 
 fn checkNamesExist(comptime i: usize, comptime T: type, comptime prop: []const u8, comptime names: anytype) void {
     comptime {
-        const kind = if (@typeInfo(T) == .@"union") "variant" else "field";
+        const kind = switch (@typeInfo(T)) {
+            .@"union" => "variant",
+            .@"enum" => "value",
+            else => "field",
+        };
         for (names) |name| {
             if (!@hasField(T, name)) {
                 @compileError(label(i, T) ++ "." ++ prop ++ ": `" ++ name ++ "` does not match any " ++ kind ++ " of " ++ @typeName(T));
@@ -187,10 +192,11 @@ fn checkEntry(comptime entries: anytype, comptime i: usize) void {
             }
         }
         if (T == Value) {
-            @compileError(label(i, T) ++ ": json.Value cannot be annotated; codec entries annotate structs and tagged unions");
+            @compileError(label(i, T) ++ ": json.Value cannot be annotated; codec entries annotate structs, tagged unions, and enums");
         }
+        if (@typeInfo(T) == .@"enum") return checkEnumEntry(i, T, entry);
         if (!isKeyed(T)) {
-            @compileError(label(i, T) ++ ": " ++ @typeName(T) ++ " is not a struct or union; codec entries annotate structs and tagged unions");
+            @compileError(label(i, T) ++ ": " ++ @typeName(T) ++ " is not a struct, union, or enum; codec entries annotate structs, tagged unions, and enums");
         }
         const is_union = @typeInfo(T) == .@"union";
 
@@ -233,6 +239,114 @@ fn checkEntry(comptime entries: anytype, comptime i: usize) void {
             }
         }
         if (entry.hooks) |Hooks| checkHooksNamespace(T, Hooks);
+    }
+}
+
+/// Construction-time checks of an enum's entry: it may set only
+/// `json_rename`, whose names must be distinct.
+fn checkEnumEntry(comptime i: usize, comptime E: type, comptime entry: Annotations(E)) void {
+    comptime {
+        const where = label(i, E);
+        const is_enum = " is an enum";
+        if (entry.json_skip != null) @compileError(where ++ ".json_skip: json_skip applies to structs only, and " ++ @typeName(E) ++ is_enum);
+        if (entry.json_flatten != null) @compileError(where ++ ".json_flatten: json_flatten applies to structs only, and " ++ @typeName(E) ++ is_enum);
+        if (entry.json_tag != null) @compileError(where ++ ".json_tag: json_tag applies to tagged unions only, and " ++ @typeName(E) ++ is_enum);
+        if (entry.json_payload != null) @compileError(where ++ ".json_payload: json_payload applies to tagged unions only, and " ++ @typeName(E) ++ is_enum);
+        if (entry.hooks) |Hooks| checkHooksNamespace(E, Hooks);
+        const renames = entry.json_rename orelse return;
+        @setEvalBranchQuota(quadraticQuota(renames.len));
+        var from: [renames.len][]const u8 = undefined;
+        for (&from, renames) |*name, r| {
+            checkNamesExist(i, E, "json_rename", .{r.zig_name});
+            name.* = r.zig_name;
+        }
+        const sorted = sortedIndices(&from);
+        for (sorted, 0..) |b, k| {
+            if (k > 0 and std.mem.eql(u8, from[sorted[k - 1]], from[b])) {
+                @compileError(where ++ ".json_rename: `" ++ from[b] ++ "` is renamed twice");
+            }
+        }
+        const names = enumNamesFrom(E, renames);
+        checkEnumWireNames(E, &names, where ++ ".json_rename");
+    }
+}
+
+/// The name `renames` gives `name`, or `name` when no pair renames it.
+pub fn renameIn(comptime renames: []const AnnotationRename, comptime name: []const u8) []const u8 {
+    comptime {
+        for (renames) |r| {
+            if (std.mem.eql(u8, r.zig_name, name)) return r.json_name;
+        }
+        return name;
+    }
+}
+
+/// The name `renames` gives each value of enum `E`, in declaration order.
+/// Sorting both sides and merging keeps a long list linear-logarithmic
+/// where looking each value up would be quadratic.
+pub fn enumNamesFrom(comptime E: type, comptime renames: []const AnnotationRename) [@typeInfo(E).@"enum".field_names.len][]const u8 {
+    comptime {
+        const tags = @typeInfo(E).@"enum".field_names;
+        @setEvalBranchQuota(quadraticQuota(tags.len + renames.len));
+        var out: [tags.len][]const u8 = undefined;
+        for (&out, tags) |*name, tag| name.* = tag;
+        var from: [renames.len][]const u8 = undefined;
+        for (&from, renames) |*name, r| name.* = r.zig_name;
+        const by_tag = sortedIndices(&out);
+        const by_rename = sortedIndices(&from);
+        var j = 0;
+        for (by_tag) |t| {
+            while (j < by_rename.len and std.mem.order(u8, from[by_rename[j]], tags[t]) == .lt) j += 1;
+            if (j < by_rename.len and std.mem.eql(u8, from[by_rename[j]], tags[t])) out[t] = renames[by_rename[j]].json_name;
+        }
+        return out;
+    }
+}
+
+/// Indices of `names`, ordered by name; equal names keep their order.
+pub fn sortedIndices(comptime names: []const []const u8) []const usize {
+    comptime {
+        @setEvalBranchQuota(quadraticQuota(names.len));
+        var order: [names.len]usize = undefined;
+        for (&order, 0..) |*o, n| o.* = n;
+        return sortIndicesByName(names, &order);
+    }
+}
+
+/// Fails compilation when two values of enum `E` share a wire name.
+/// `names` holds each value's name in declaration order, and `prefix`
+/// says where the names came from.
+pub fn checkEnumWireNames(comptime E: type, comptime names: []const []const u8, comptime prefix: []const u8) void {
+    comptime {
+        @setEvalBranchQuota(quadraticQuota(names.len));
+        const sorted = sortedIndices(names);
+        const tags = @typeInfo(E).@"enum".field_names;
+        for (sorted, 0..) |b, k| {
+            if (k == 0) continue;
+            const a = sorted[k - 1];
+            if (!std.mem.eql(u8, names[a], names[b])) continue;
+            @compileError(prefix ++ ": values `" ++ tags[@min(a, b)] ++ "` and `" ++ tags[@max(a, b)] ++ "` both have the wire name `" ++ names[a] ++ "`");
+        }
+    }
+}
+
+fn sortIndicesByName(comptime names: []const []const u8, comptime items: []const usize) []const usize {
+    comptime {
+        if (items.len < 2) return items;
+        @setEvalBranchQuota(quadraticQuota(items.len));
+        const a = sortIndicesByName(names, items[0 .. items.len / 2]);
+        const b = sortIndicesByName(names, items[items.len / 2 ..]);
+        var out: [items.len]usize = undefined;
+        var i = 0;
+        for (&out, 0..) |*m, n| {
+            const k = n - i;
+            if (k == b.len or (i < a.len and std.mem.order(u8, names[b[k]], names[a[i]]) != .lt)) {
+                m.* = a[i];
+                i += 1;
+            } else m.* = b[k];
+        }
+        const fixed = out;
+        return &fixed;
     }
 }
 
@@ -649,7 +763,8 @@ fn quadraticQuota(comptime n: comptime_int) comptime_int {
 /// Sizes of `T` that set branch quotas, each computed once per type.
 fn Budget(comptime T: type) type {
     return struct {
-        /// Fields or variants of `T`, plus those of each field or variant type.
+        /// Fields, variants, or values of `T`, plus the fields or variants of
+        /// each field or variant type.
         const members: usize = count: switch (@typeInfo(T)) {
             inline .@"struct", .@"union" => |info| {
                 @setEvalBranchQuota(1000 + 10 * info.field_names.len);
@@ -662,6 +777,7 @@ fn Budget(comptime T: type) type {
                 }
                 break :count n;
             },
+            .@"enum" => |info| info.field_names.len,
             else => 0,
         };
 

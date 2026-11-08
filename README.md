@@ -117,7 +117,7 @@ const cfg = try json.parseInto(Config, arena, src, .{});
 
 Supported types: `bool`, all int/float widths (overflow-checked),
 `[]const u8`, slices, fixed-size arrays, optionals, nested structs, enums
-(string name or integer tag), `union(enum)` (tagged-union with the
+(by name or integer tag), `union(enum)` (tagged-union with the
 `json_tag` annotation -- see below). Embed a raw `json.Value` to keep
 dynamic substructures.
 
@@ -136,6 +136,23 @@ const Server = struct {
     runtime: u32 = 0,     // excluded from decode/encode
 };
 ```
+
+`json_rename` also renames an enum's values:
+
+```zig
+const Level = enum {
+    pub const json_rename = .{ .warn = "warning" };
+
+    debug,
+    info,
+    warn,
+};
+```
+
+`"warning"` decodes as `.warn`, and `.warn` encodes as `"warning"`. A
+renamed value is read only from its new name, so `"warn"` is rejected;
+an integer decodes by tag value either way. The names in effect must be
+distinct.
 
 For custom (de)serialization of a type, provide either or both of these
 hooks on the type:
@@ -158,7 +175,9 @@ const Plugin = union(enum) {
 
 `"kind": "http"` in the object picks the `.http` variant; the remaining
 members decode as `HttpConfig`. For variant-name overrides, use
-`json_rename` on the union itself.
+`json_rename` on the union itself. A `union(E)` does not take `E`'s
+renames for its discriminator, so a field of type `E` and the union's
+discriminator can spell the same value differently.
 
 To hold the payload under one member instead of inline, add
 `json_payload`:
@@ -202,10 +221,10 @@ output decodes back via `parseInto(T, ...)`. The plain
 
 ### Annotating types from outside them
 
-Annotations and hooks are declarations, but a type built with `@Struct`
-or `@Union` cannot carry declarations, and a type from another package
-cannot be edited to add them. `json.Codec` supplies them from outside
-instead: it takes a tuple of
+Annotations and hooks are declarations, but a type built with `@Struct`,
+`@Union`, or `@Enum` cannot carry declarations, and a type from another
+package cannot be edited to add them. `json.Codec` supplies them from
+outside instead: it takes a tuple of
 `json.Annotations(T)` values, one per type, and returns `parseInto`,
 `parseIntoReader`, `decode`, and `encodeTyped` with the module's own
 arguments.
@@ -229,16 +248,16 @@ const drawing = try ShapeCodec.parseInto(Drawing, arena, src, .{});
 try ShapeCodec.encodeTyped(w, drawing, arena, .{});
 ```
 
-Entries annotate structs and tagged unions only. An entry offers
-`json_rename` (as `json.AnnotationRename` pairs), `json_skip`,
-`json_flatten`, `json_tag`, `json_payload`, and `hooks`, and applies to
-its type wherever that type appears: as a field, inside
-optionals, slices, and arrays, or flattened. For each type and property,
-the entry's value wins when it is non-null, otherwise the type's own
-declaration applies, otherwise the default. Lists replace whole, so
-overriding one rename means restating the others, and an empty list
-clears the type's own list; `json_tag` and `json_payload` can be
-overridden but not cleared.
+Entries annotate structs, tagged unions, and enums; an enum's entry
+takes only `json_rename`. An entry offers `json_rename` (as
+`json.AnnotationRename` pairs), `json_skip`, `json_flatten`, `json_tag`,
+`json_payload`, and `hooks`, and applies to its type wherever that type
+appears: as a field, inside optionals, slices, and arrays, or flattened.
+For each type and property, the entry's value wins when it is non-null,
+otherwise the type's own declaration applies, otherwise the default.
+Lists replace whole, so overriding one rename means restating the
+others, and an empty list clears the type's own list; `json_tag` and
+`json_payload` can be overridden but not cleared.
 
 `hooks` names a namespace declaring `fromJson` and/or `toJson` with the
 type-local signatures, written against the annotated type by name
@@ -253,16 +272,18 @@ by reflection, ignoring any `toJson`, while decoding still calls any
 `fromJson`.
 
 `json_skip` on a field without a default, common for a type you cannot
-edit, encodes by omitting the field; decoding that type is a compile error
-unless an effective `fromJson` hook decodes it. Other misuse fails at
-compile time with a message naming the type, the entry, and the property:
-a field or variant that does not exist, or a property that does not apply
-to the type. One rule covers the shape of an object: a codec may not make
-two members that can appear together share a key, two variants share a
-wire name, or let a flattened or inline struct have hooks, unless the
-declarations of the type holding them already do the same. So a value
-restating a declaration changes nothing, and a collision a struct's own
-declarations allow stays allowed when a codec flattens that struct.
+edit, encodes by omitting the field; decoding that type is a compile
+error unless an effective `fromJson` hook decodes it. Other misuse fails
+at compile time with a message naming the type, the entry, and the
+property: a field, variant, or value that does not exist, or a property
+that does not apply to the type. One rule covers the shape of an object:
+a codec may not make two members that can appear together share a key,
+two variants share a wire name, or let a flattened or inline struct have
+hooks, unless the declarations of the type holding them already do the
+same. So a value restating a declaration changes nothing, and a
+collision a struct's own declarations allow stays allowed when a codec
+flattens that struct. The names in effect for an enum's values
+must be distinct, whether the enum or its entry gives them.
 
 ### Editing (lossless document model)
 

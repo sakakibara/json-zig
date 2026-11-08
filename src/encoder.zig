@@ -94,10 +94,11 @@ pub fn encode(w: *Io.Writer, value: Value, options: EncodeOptions) EncodeError!v
 /// fields or values beyond i128 range, use `number_mode = .raw` on the
 /// decode side to parse the lexeme directly. Null optional fields are
 /// omitted from objects entirely (decode maps absent to null). Enums emit
-/// their tag name as a string. Tagged unions emit the discriminator member
-/// first, then the payload's fields inline in the same object. Embedded
-/// `Value` fields encode dynamically. NaN and +/-Inf floats yield
-/// `error.UnrepresentableFloat`; `arena` only backs `toJson` hook values.
+/// their name, after any `json_rename`, as a string. Tagged unions emit the
+/// discriminator member first, then the payload's fields inline in the same
+/// object. Embedded `Value` fields encode dynamically. NaN and +/-Inf
+/// floats yield `error.UnrepresentableFloat`; `arena` only backs `toJson`
+/// hook values.
 ///
 /// Wide-integer boundary: a u128 value above i128 max
 /// (170141183460469231731687303715884105727) is emitted correctly as a
@@ -152,7 +153,7 @@ fn writeTypedValue(comptime T: type, comptime TCodec: type, value: T, w: *Io.Wri
             }
         },
         .@"struct" => try writeTypedObject(T, TCodec, value, w, arena, options, depth),
-        .@"enum" => try writeQuotedString(w, @tagName(value)),
+        .@"enum" => try writeQuotedString(w, decode_mod.enumName(T, TCodec, value)),
         else => @compileError("json encodeTyped: unsupported type " ++ @typeName(T)),
     }
 }
