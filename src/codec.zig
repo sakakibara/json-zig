@@ -126,7 +126,8 @@ pub fn Codec(comptime entries: anytype) type {
         /// and `toJson` hooks that `decode` honors, so the output decodes back
         /// through this codec's `parseInto`. Null optional fields are omitted
         /// entirely; enums emit their name, after any `json_rename`, as a
-        /// string; tagged unions emit the discriminator member first, then
+        /// string, and an unnamed value of a non-exhaustive enum its
+        /// integer; tagged unions emit the discriminator member first, then
         /// either the payload's fields inline or, with `json_payload`, the
         /// payload under that member. `options.indent` pretty-prints
         /// and `options.sort_keys` emits members in ascending key order (declaration

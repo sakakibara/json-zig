@@ -94,7 +94,8 @@ pub fn encode(w: *Io.Writer, value: Value, options: EncodeOptions) EncodeError!v
 /// fields or values beyond i128 range, use `number_mode = .raw` on the
 /// decode side to parse the lexeme directly. Null optional fields are
 /// omitted from objects entirely (decode maps absent to null). Enums emit
-/// their name, after any `json_rename`, as a string. Tagged unions emit the
+/// their name, after any `json_rename`, as a string; an unnamed value of a
+/// non-exhaustive enum emits its integer. Tagged unions emit the
 /// discriminator member first, then the payload's fields inline in the same
 /// object. Embedded `Value` fields encode dynamically. NaN and +/-Inf
 /// floats yield `error.UnrepresentableFloat`; `arena` only backs `toJson`
@@ -153,7 +154,10 @@ fn writeTypedValue(comptime T: type, comptime TCodec: type, value: T, w: *Io.Wri
             }
         },
         .@"struct" => try writeTypedObject(T, TCodec, value, w, arena, options, depth),
-        .@"enum" => try writeQuotedString(w, decode_mod.enumName(T, TCodec, value)),
+        .@"enum" => if (decode_mod.enumName(T, TCodec, value)) |name|
+            try writeQuotedString(w, name)
+        else
+            try w.print("{d}", .{@backingInt(value)}),
         else => @compileError("json encodeTyped: unsupported type " ++ @typeName(T)),
     }
 }
@@ -1071,6 +1075,35 @@ test "encodeTyped: enum emits tag name string" {
     const c: C = .{ .mode = .slow };
     try encodeTyped(Codec(.{}), &aw.writer, c, a, .{});
     try testing.expectEqualStrings("{\"mode\":\"slow\"}", aw.written());
+}
+
+test "encodeTyped: unnamed non-exhaustive enum value emits its integer" {
+    const Plain = enum(u8) { a, b, _ };
+    const Renamed = enum(u8) {
+        a,
+        b,
+        _,
+        pub const json_rename = .{ .a = "A" };
+    };
+    const Signed = enum(i16) { a = -1, b = 300, _ };
+    const Nameless = enum(u8) { _ };
+    const C = struct { p: Plain, r: Renamed, s: Signed, n: Nameless };
+    var ar = std.heap.ArenaAllocator.init(testing.allocator);
+    defer ar.deinit();
+    const a = ar.allocator();
+    const cases = [_]struct { src: []const u8, want: C }{
+        .{ .src = "{\"p\":7,\"r\":9,\"s\":-300,\"n\":5}", .want = .{ .p = @fromBackingInt(7), .r = @fromBackingInt(9), .s = @fromBackingInt(-300), .n = @fromBackingInt(5) } },
+        .{ .src = "{\"p\":\"b\",\"r\":\"A\",\"s\":\"b\",\"n\":0}", .want = .{ .p = .b, .r = .a, .s = .b, .n = @fromBackingInt(0) } },
+        .{ .src = "{\"p\":255,\"r\":\"b\",\"s\":\"a\",\"n\":255}", .want = .{ .p = @fromBackingInt(255), .r = .b, .s = .a, .n = @fromBackingInt(255) } },
+    };
+    for (cases) |case| {
+        const got = try parseInto(C, Codec(.{}), a, case.src, .{});
+        try testing.expectEqual(case.want, got);
+        var aw: Io.Writer.Allocating = .init(a);
+        defer aw.deinit();
+        try encodeTyped(Codec(.{}), &aw.writer, got, a, .{});
+        try testing.expectEqualStrings(case.src, aw.written());
+    }
 }
 
 test "encodeTyped: toJson hook overrides built-in encoding" {

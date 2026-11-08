@@ -247,18 +247,21 @@ fn enumFromName(comptime E: type, comptime TCodec: type, s: []const u8) ?E {
     return if (comptime N.renamed) N.map.get(s) else std.meta.stringToEnum(E, s);
 }
 
-/// The wire name of `value` through codec `TCodec`.
-pub fn enumName(comptime E: type, comptime TCodec: type, value: E) []const u8 {
+/// The wire name of `value` through codec `TCodec`, or null for an unnamed
+/// value of a non-exhaustive enum.
+pub fn enumName(comptime E: type, comptime TCodec: type, value: E) ?[]const u8 {
     comptime validateEnumAnnotations(E, TCodec);
-    if (comptime !EnumNames(E, TCodec).renamed) return @tagName(value);
+    const N = EnumNames(E, TCodec);
     if (comptime @typeInfo(E).@"enum".mode == .exhaustive) {
+        if (comptime !N.renamed) return @tagName(value);
         return switch (value) {
-            inline else => |t| comptime EnumNames(E, TCodec).nameOf(t),
+            inline else => |t| comptime N.nameOf(t),
         };
     } else {
+        if (comptime @typeInfo(E).@"enum".field_names.len == 0) return null;
         return switch (value) {
-            inline else => |t| comptime EnumNames(E, TCodec).nameOf(t),
-            _ => @tagName(value),
+            inline else => |t| comptime if (N.renamed) N.nameOf(t) else @tagName(t),
+            _ => null,
         };
     }
 }

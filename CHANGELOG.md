@@ -6,6 +6,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `encodeTyped` applied `@tagName` to an unnamed value of a
+  non-exhaustive enum, such as one decoded from a JSON integer. Debug and
+  ReleaseSafe builds panicked; ReleaseFast and ReleaseSmall builds read
+  outside the enum's name table, writing a wrong name, stray bytes, or
+  crashing. Such a value now encodes as its integer, so one decoded from
+  a JSON integer encodes back to that integer.
+
 ## [0.5.0] - 2026-11-08
 
 ### Added
