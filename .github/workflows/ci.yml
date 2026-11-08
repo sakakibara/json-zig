@@ -2,10 +2,15 @@ name: ci
 
 on:
   push:
-    branches: [main, zig-0.16]
+    branches: ['ci/**']
   pull_request:
-    branches: [main, zig-0.16]
   workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   ZIG_VERSION: "0.16.0"
@@ -14,6 +19,8 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions: {contents: read}
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +30,7 @@ jobs:
           - macos-latest       # aarch64-macos
           - windows-latest     # x86_64-windows
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: install zig (unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -58,6 +65,8 @@ jobs:
   cross-compile:
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {contents: read}
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +80,7 @@ jobs:
           - riscv64-linux-gnu     # 64-bit little-endian (RISC-V)
           - wasm32-wasi           # 32-bit wasm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - name: install zig
         shell: bash
         run: |
@@ -81,3 +90,18 @@ jobs:
           echo "$HOME/zig/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
       - name: build for ${{ matrix.target }}
         run: zig build -Dtarget=${{ matrix.target }} -Doptimize=ReleaseSafe
+
+  ci-ok:
+    if: always()
+    needs: [test, cross-compile]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {actions: read}
+    steps:
+      - shell: bash
+        env: {GH_TOKEN: "${{ github.token }}"}
+        run: |
+          set -o pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=all&per_page=100" --paginate --jq '.jobs[]' \
+            | jq -rs '[.[] | select(.name != "ci-ok")] | group_by(.name) | map(max_by(.run_attempt).conclusion) | unique[]' > c
+          [ "$(cat c)" = success ] || { echo "jobs ended:"; cat c; exit 1; }
